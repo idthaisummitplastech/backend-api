@@ -100,9 +100,19 @@ class EmailNotificationService:
                 server.sendmail(self.from_email, [to_email], msg.as_string())
 
             logger.info("Email successfully sent to: %s with subject: %s", to_email, subject)
+            try:
+                from app.core.observability import push_email_log_to_grafana
+                push_email_log_to_grafana("web_karir", self.from_name, to_email, subject, "SUCCESS")
+            except Exception:
+                pass
             return {"success": True}
         except Exception as e:
             logger.error("Failed to send email to %s: %s", to_email, str(e))
+            try:
+                from app.core.observability import push_email_log_to_grafana
+                push_email_log_to_grafana("web_karir", self.from_name, to_email, subject, "FAILED", str(e))
+            except Exception:
+                pass
             return {"success": False, "error": str(e)}
 
     def send_screening_passed(self, to_email: str, name: str, position: str, token: str, test_url: str) -> Dict[str, Any]:
