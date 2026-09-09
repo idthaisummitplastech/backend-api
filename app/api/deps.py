@@ -1,9 +1,10 @@
 from typing import Generator, List, Optional
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.core.config import settings
 from app.core.security import decode_access_token
 from app.crud.crud_auth import crud_admin
 from app.crud.crud_recruitment import crud_applicant
@@ -15,10 +16,19 @@ security_scheme = HTTPBearer(auto_error=False)
 
 
 def get_current_admin(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
     db: Session = Depends(get_db),
 ) -> RecruitmentAdmin:
-    """Validate Bearer JWT and retrieve authenticated Admin / HR entity."""
+    """Validate Bearer JWT or internal service secret and retrieve authenticated Admin / HR entity."""
+    # 1. Allow internal service communication from Next.js server actions
+    internal_key = request.headers.get("x-internal-secret") or request.headers.get("X-Internal-Secret")
+    if internal_key and internal_key == settings.SECRET_KEY:
+        admin = crud_admin.get_by_username(db, "admin")
+        if admin:
+            return admin
+        return RecruitmentAdmin(id=1, username="admin", name="Administrator", role="admin", email="admin@itsp.co.id")
+
     if not credentials or not credentials.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -45,11 +55,24 @@ def get_current_admin(
     return admin
 
 
+
 def get_current_applicant(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
     db: Session = Depends(get_db),
 ) -> Applicant:
-    """Validate Bearer JWT and retrieve authenticated Applicant."""
+    """Validate Bearer JWT or internal service secret + applicant ID."""
+    internal_key = request.headers.get("x-internal-secret") or request.headers.get("X-Internal-Secret")
+    if internal_key and internal_key == settings.SECRET_KEY:
+        app_id_str = request.headers.get("x-applicant-id") or request.headers.get("X-Applicant-Id")
+        if app_id_str:
+            try:
+                applicant = crud_applicant.get(db, int(app_id_str))
+                if applicant:
+                    return applicant
+            except (ValueError, TypeError):
+                pass
+
     if not credentials or not credentials.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

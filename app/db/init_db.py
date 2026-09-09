@@ -17,7 +17,8 @@ def init_db(db: Session) -> None:
 
     # 1. Seed Default Admin
     admin = crud_admin.get_by_username(db, "admin")
-    if not admin:
+    admin_email = crud_admin.get_by_email(db, "admin@itsp.co.id")
+    if not admin and not admin_email:
         crud_admin.create(
             db,
             obj_in=AdminCreate(
@@ -33,7 +34,8 @@ def init_db(db: Session) -> None:
 
     # 2. Seed Default HR Evaluator
     hr = crud_admin.get_by_username(db, "hr_recruitment")
-    if not hr:
+    hr_email = crud_admin.get_by_email(db, "recruitment@itsp.co.id")
+    if not hr and not hr_email:
         crud_admin.create(
             db,
             obj_in=AdminCreate(
@@ -49,7 +51,8 @@ def init_db(db: Session) -> None:
 
     # 3. Seed Default IT User Dept Evaluator
     user_dept = crud_admin.get_by_username(db, "user_it")
-    if not user_dept:
+    user_dept_email = crud_admin.get_by_email(db, "it.head@itsp.co.id")
+    if not user_dept and not user_dept_email:
         crud_admin.create(
             db,
             obj_in=AdminCreate(
@@ -58,10 +61,10 @@ def init_db(db: Session) -> None:
                 email="it.head@itsp.co.id",
                 password="it123!Password",
                 role="user_dept",
-                department="IT",
+                department="IT & Enterprise System",
             ),
         )
-        logger.info("Default User Dept created: user_it / it123!Password")
+        logger.info("Default User Dept evaluator created: user_it / it123!Password")
 
     # 4. Master Recruitment Settings
     default_settings = {

@@ -16,9 +16,11 @@ from app.models.cms import (
     Faq,
     Statistic,
     ContactSubmission,
+    ContactSubmission,
     Certification,
     Facility,
 )
+from app.models.auth import User
 
 
 class CMSModelRegistry:
@@ -43,7 +45,9 @@ class CMSModelRegistry:
         "contacts": ContactSubmission,
         "certifications": Certification,
         "facilities": Facility,
+        "users": User,
     }
+
 
     @classmethod
     def get_model(cls, slug: str) -> Optional[Type[Base]]:

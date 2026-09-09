@@ -39,6 +39,7 @@ class Settings(BaseSettings):
 
     # PostgreSQL Database
     DATABASE_URL: str = "postgresql+psycopg://sydit:syditsp@localhost:5432/web_karir"
+    DATABASE_COMPANY_URL: str = "postgresql+psycopg://sydit:syditsp@localhost:5432/web_perusahaan"
     DATABASE_POOL_SIZE: int = 20
     DATABASE_MAX_OVERFLOW: int = 10
 

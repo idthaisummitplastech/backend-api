@@ -131,6 +131,35 @@ class EmailNotificationService:
         html = self._wrap_corporate_template(subject, content, "Mulai Ujian Psikotes", test_url)
         return self.send_email(to_email, subject, html)
 
+    def send_user_test_invitation(self, to_email: str, name: str, position: str, token: str, test_url: str) -> Dict[str, Any]:
+        """Notify candidate of passing Psikotes and receiving token for Stage 3 Technical Test."""
+        subject = f"[PT ITSP] Lolos Psikotes & Undangan Ujian Teknis - {position}"
+        content = f"""
+        <p>Yth. Sdr/i. <strong>{name}</strong>,</p>
+        <p>Selamat! Anda dinyatakan <strong>lolos Ujian Psikotes (Tahap 2)</strong> untuk posisi <strong>{position}</strong> di PT Indonesia Thai Summit Plastech. Selanjutnya kami mengundang Anda mengikuti <strong>Ujian Teknis User (Tahap 3)</strong>.</p>
+
+        <div style="background-color: #f8fafc; border-left: 4px solid #0f172a; padding: 15px; margin: 20px 0; border-radius: 4px;">
+            <p style="margin: 0 0 8px;"><strong>Token Sesi Ujian:</strong> <span style="font-family: monospace; font-size: 18px; color: #2563eb; font-weight: bold; background: #e0e7ff; padding: 2px 8px; border-radius: 4px;">{token}</span></p>
+            <p style="margin: 0; font-size: 13px; color: #64748b;">Token ini bersifat rahasia dan unik untuk akun Anda.</p>
+        </div>
+        <p>Silakan klik tombol di bawah ini untuk mengakses ruang ujian pada Portal Karir kami:</p>
+        """
+        html = self._wrap_corporate_template(subject, content, "Mulai Ujian Teknis", test_url)
+        return self.send_email(to_email, subject, html)
+
+    def send_stage_reminder(self, to_email: str, name: str, position: str, stage: int, stage_status: Optional[str] = None) -> Dict[str, Any]:
+        """Generic stage status reminder (recovery resend for stages without dedicated token email)."""
+        subject = f"[PT ITSP] Pengingat Status Seleksi Tahap {stage} - {position}"
+        status_text = "sedang berjalan" if (stage_status or "in_progress") == "in_progress" else str(stage_status)
+        content = f"""
+        <p>Yth. Sdr/i. <strong>{name}</strong>,</p>
+        <p>Ini adalah pengiriman ulang notifikasi resmi terkait proses seleksi Anda untuk posisi <strong>{position}</strong> di PT Indonesia Thai Summit Plastech.</p>
+        <p>Status Anda saat ini: <strong>Tahap {stage} ({status_text})</strong>.</p>
+        <p>Silakan pantau Portal Karir kami secara berkala untuk jadwal, token ujian, atau undangan wawancara terbaru. Jika Anda belum menerima token padahal seharusnya sudah dijadwalkan, hubungi tim HR kami.</p>
+        """
+        html = self._wrap_corporate_template(subject, content, "Buka Portal Karir", f"{settings.FRONTEND_CAREER_URL}/portal")
+        return self.send_email(to_email, subject, html)
+
     def send_rejection_notice(self, to_email: str, name: str, position: str, reason: Optional[str] = None) -> Dict[str, Any]:
         """Send respectful corporate rejection notice."""
         subject = f"[PT ITSP] Pembaruan Status Seleksi - {position}"
