@@ -1,0 +1,40 @@
+name: Deploy backend-api to D PM2
+
+# FULL OTOMATIS: push ke main -> server D:\itsp-backend langsung update.
+# Butuh 1x pasang GitHub Self-Hosted Runner Windows di server (lihat PANDUAN_DEPLOY_D_PM2.md S8b).
+# .env di D:\itsp-backend\.env AMAN (di-ignore git, tidak tertimpa reset).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-itsp-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Pull + pip + pm2 restart :8004
+    runs-on: self-hosted
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Update D:\itsp-backend dari GitHub
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-Location D:\itsp-backend
+          git fetch origin main
+          git reset --hard origin/main
+          D:\itsp-backend\venv\Scripts\pip.exe install -r requirements.txt
+          pm2 restart itsp-backend
+          pm2 save
+          pm2 list
+
+      - name: Health check :8004
+        run: |
+          $ErrorActionPreference = "Stop"
+          Start-Sleep -Seconds 8
+          Invoke-RestMethod http://localhost:8004/health | Out-String | Write-Host
+          Invoke-RestMethod http://localhost:8004/ | Out-String | Write-Host
