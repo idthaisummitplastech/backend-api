@@ -2,7 +2,9 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.db.base_class import Base
-from app.db.session import engine
+from app.db.session import engine, engine_company
+from app.db import base as models_base  # noqa: F401 - ensure all CMS models registered
+from app.db.seed_company import seed_company_cms
 from app.crud.crud_auth import crud_admin
 from app.crud.crud_recruitment import crud_setting
 from app.schemas.auth import AdminCreate
@@ -14,6 +16,12 @@ def init_db(db: Session) -> None:
     """Initialize tables and create default seed users and master configuration."""
     logger.info("Synchronizing database tables...")
     Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine_company)
+        logger.info("Company CMS tables synchronized (web_perusahaan).")
+        seed_company_cms()
+    except Exception as e:
+        logger.warning(f"Company DB sync skipped: {e}")
 
     # 1. Seed Default Admin
     admin = crud_admin.get_by_username(db, "admin")

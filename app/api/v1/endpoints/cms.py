@@ -16,6 +16,7 @@ from app.models.cms import (
     Service,
     BlogPost,
     ContactSubmission,
+    SustainabilityReport,
 )
 from app.models.auth import User, RecruitmentAdmin
 from app.schemas.cms import ContactSubmissionCreate, ContactSubmissionResponse
@@ -81,6 +82,7 @@ def get_dashboard_stats(
     facility_count = db.query(Facility).count()
     service_count = db.query(Service).count()
     blog_count = db.query(BlogPost).count()
+    report_count = db.query(SustainabilityReport).count()
     contact_count = db.query(ContactSubmission).count()
     unread_contacts = db.query(ContactSubmission).filter(ContactSubmission.is_read == False).count()
     user_count = db.query(User).count()
@@ -107,6 +109,7 @@ def get_dashboard_stats(
         "facility_count": facility_count,
         "service_count": service_count,
         "blog_count": blog_count,
+        "report_count": report_count,
         "contact_count": contact_count,
         "unread_contacts": unread_contacts,
         "user_count": user_count,
@@ -221,7 +224,7 @@ def get_cms_items(
     Retrieve dynamic CMS records for Web Perusahaan.
     Supports: settings, nav-menus, hero-sections, announcements, partners,
     features, services, products, blog-posts, testimonials, faqs, statistics,
-    certifications, facilities, users.
+    certifications, facilities, sustainability-reports, users.
     """
     crud = CMSModelRegistry.get_crud(model)
     if not crud:

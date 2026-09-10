@@ -26,4 +26,5 @@ from app.models.cms import (  # noqa
     ContactSubmission,
     Certification,
     Facility,
+    SustainabilityReport,
 )

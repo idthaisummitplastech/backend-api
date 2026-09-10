@@ -16,9 +16,9 @@ from app.models.cms import (
     Faq,
     Statistic,
     ContactSubmission,
-    ContactSubmission,
     Certification,
     Facility,
+    SustainabilityReport,
 )
 from app.models.auth import User
 
@@ -45,6 +45,7 @@ class CMSModelRegistry:
         "contacts": ContactSubmission,
         "certifications": Certification,
         "facilities": Facility,
+        "sustainability-reports": SustainabilityReport,
         "users": User,
     }
 

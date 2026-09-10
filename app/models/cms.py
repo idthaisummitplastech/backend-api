@@ -200,3 +200,24 @@ class Facility(Base, TimestampMixin):
     specifications = Column(Text, nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+
+
+class SustainabilityReport(Base, TimestampMixin):
+    """News & Sustainability documents (waste, GHG, B3, water) — fully CMS-editable."""
+
+    __tablename__ = "sustainability_reports"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    title = Column(String(255), nullable=False)
+    category = Column(String(100), default="general", nullable=False)
+    category_title_en = Column(String(255), nullable=True)
+    category_title_id = Column(String(255), nullable=True)
+    category_desc_en = Column(Text, nullable=True)
+    category_desc_id = Column(Text, nullable=True)
+    category_badge = Column(String(255), nullable=True)
+    file_url = Column(Text, nullable=False)
+    file_type = Column(String(20), default="PDF", nullable=False)
+    file_size = Column(String(50), nullable=True)
+    tag = Column(String(100), nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
