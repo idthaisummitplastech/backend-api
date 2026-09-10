@@ -1,4 +1,6 @@
 import logging
+import os
+import secrets
 from sqlalchemy.orm import Session
 
 from app.db.base_class import Base
@@ -23,56 +25,67 @@ def init_db(db: Session) -> None:
     except Exception as e:
         logger.warning(f"Company DB sync skipped: {e}")
 
-    # 1. Seed Default Admin
+    # 1. Seed Default Admin — password WAJIB via env, tanpa hardcoded di code.
+    # Contoh: SEED_ADMIN_PASSWORD="isi-password-kuat-sementara" python -m app.db.init_db
+    # Jika env kosong, buat password acak aman agar tidak ada kredensial default yang lemah.
     admin = crud_admin.get_by_username(db, "admin")
     admin_email = crud_admin.get_by_email(db, "admin@itsp.co.id")
     if not admin and not admin_email:
+        admin_password = os.getenv("SEED_ADMIN_PASSWORD") or secrets.token_urlsafe(24)
         crud_admin.create(
             db,
             obj_in=AdminCreate(
                 username="admin",
                 name="System Superadmin",
                 email="admin@itsp.co.id",
-                password="admin123!Password",
+                password=admin_password,
                 role="admin",
                 department="IT",
             ),
         )
-        logger.info("Default superadmin created: admin / admin123!Password")
+        if os.getenv("SEED_ADMIN_PASSWORD"):
+            logger.info("Default superadmin created: admin (password dari SEED_ADMIN_PASSWORD)")
+        else:
+            logger.warning(
+                "SEED_ADMIN_PASSWORD kosong — superadmin dibuat dengan password acak. "
+                "Set SEED_ADMIN_PASSWORD via env lalu reset password bila perlu."
+            )
 
-    # 2. Seed Default HR Evaluator
+    # 2. Seed Default HR Evaluator — password WAJIB via env / acak, tanpa hardcoded.
     hr = crud_admin.get_by_username(db, "hr_recruitment")
     hr_email = crud_admin.get_by_email(db, "recruitment@itsp.co.id")
     if not hr and not hr_email:
+        hr_password = os.getenv("SEED_HR_PASSWORD") or secrets.token_urlsafe(24)
         crud_admin.create(
             db,
             obj_in=AdminCreate(
                 username="hr_recruitment",
                 name="HR Recruitment Specialist",
                 email="recruitment@itsp.co.id",
-                password="hr123!Password",
+                password=hr_password,
                 role="hr",
                 department="HRD & GA",
             ),
         )
-        logger.info("Default HR user created: hr_recruitment / hr123!Password")
+        logger.info("Default HR user created: hr_recruitment (password via SEED_HR_PASSWORD / acak)")
 
-    # 3. Seed Default IT User Dept Evaluator
+    # 3. Seed Default IT User Dept Evaluator — password WAJIB via env / acak.
     user_dept = crud_admin.get_by_username(db, "user_it")
     user_dept_email = crud_admin.get_by_email(db, "it.head@itsp.co.id")
     if not user_dept and not user_dept_email:
+        it_password = os.getenv("SEED_IT_PASSWORD") or secrets.token_urlsafe(24)
         crud_admin.create(
             db,
             obj_in=AdminCreate(
                 username="user_it",
                 name="IT Section Head",
                 email="it.head@itsp.co.id",
-                password="it123!Password",
+                password=it_password,
                 role="user_dept",
                 department="IT & Enterprise System",
             ),
         )
-        logger.info("Default User Dept evaluator created: user_it / it123!Password")
+        logger.info("Default User Dept evaluator created: user_it (password via SEED_IT_PASSWORD / acak)")
 
     # 4. Master Recruitment Settings
     default_settings = {

@@ -6,8 +6,23 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-GRAFANA_OTLP_URL = "https://otlp-gateway-prod-ap-southeast-2.grafana.net/otlp/v1/logs"
-GRAFANA_AUTH_HEADER = "Basic MTgyMTkyOTpnbGNfZXlKdklqb2lNVGt3TXpRM01DSXNJbTRpT2lKcGRITndMV1Z0WVdsc0xXeHZaM01pTENKcklqb2lRMVp0VWt0Vk1VazFaVE0wT0RjMk1tVjFVM3B3VURrMUlpd2liU0k2ZXlKeUlqb2ljSEp2WkMxaGNDMXpiM1YwYUdWaGMzUXRNaUo5ZlE9PQ=="
+
+def _get_otlp_config() -> tuple[str, str]:
+    """Ambil URL + auth Grafana OTLP murni via env (tanpa hardcoded di code).
+
+    Ganti/rotasi cukup via env: GRAFANA_OTLP_URL, GRAFANA_AUTH_HEADER.
+    Return ("", "") bila belum dikonfigurasi -> caller no-op (skip kirim).
+    """
+    url = ""
+    auth = ""
+    try:
+        from app.core.config import settings as _s  # lazy agar tidak circular
+
+        url = (getattr(_s, "GRAFANA_OTLP_URL", "") or "").strip()
+        auth = (getattr(_s, "GRAFANA_AUTH_HEADER", "") or "").strip()
+    except Exception:
+        pass
+    return url, auth
 
 
 def push_email_log_to_grafana(
@@ -69,11 +84,17 @@ def push_email_log_to_grafana(
             ]
         }
 
+        req = None
+        otlp_url, otlp_auth = _get_otlp_config()
+        # Tanpa konfigurasi via env -> no-op agar tidak crash & tidak kirim ke URL hardcoded.
+        if not otlp_url or not otlp_auth:
+            logger.debug("Grafana OTLP belum dikonfigurasi via env (GRAFANA_OTLP_URL/GRAFANA_AUTH_HEADER) — skip.")
+            return
         req = urllib.request.Request(
-            GRAFANA_OTLP_URL,
+            otlp_url,
             data=json.dumps(payload).encode("utf-8"),
             headers={
-                "Authorization": GRAFANA_AUTH_HEADER,
+                "Authorization": otlp_auth,
                 "Content-Type": "application/json",
             },
         )

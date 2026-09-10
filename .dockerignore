@@ -1,0 +1,16 @@
+# Jangan pernah copy .env asli / secrets ke image.
+.env
+.env.local
+.env.production
+.env.production.local
+*.env
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.git/
+.gitignore
+uploads/
+*.pem
+*.key
