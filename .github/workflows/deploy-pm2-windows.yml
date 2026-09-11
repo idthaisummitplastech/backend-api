@@ -25,12 +25,39 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           Set-Location D:\itsp-backend
+
+          git config --global --add safe.directory D:/itsp-backend 2>$null
+          git config --global --add safe.directory D:\itsp-backend 2>$null
+          git config --global --add safe.directory '*' 2>$null
+
+          $extraPaths = @(
+            (Join-Path $env:APPDATA "npm"),
+            "C:\Users\IT-PLASTECH\AppData\Roaming\npm",
+            "C:\Users\Administrator\AppData\Roaming\npm",
+            "C:\Program Files\nodejs"
+          )
+          foreach ($p in $extraPaths) {
+            if ((Test-Path $p) -and ($env:Path -notlike "*$p*")) { $env:Path = "$env:Path;$p" }
+          }
+          if (-not $env:PM2_HOME) {
+            if (Test-Path "C:\Users\IT-PLASTECH\.pm2") { $env:PM2_HOME = "C:\Users\IT-PLASTECH\.pm2" }
+          }
+          $pm2Cmd = (Get-Command pm2.cmd -ErrorAction SilentlyContinue).Source
+          if (-not $pm2Cmd) {
+            foreach ($p in $extraPaths) {
+              $cand = Join-Path $p "pm2.cmd"
+              if (Test-Path $cand) { $pm2Cmd = $cand; break }
+            }
+          }
+          if (-not $pm2Cmd) { $pm2Cmd = "pm2" }
+
+          try { Remove-Item -Path .git\FETCH_HEAD -Force -ErrorAction SilentlyContinue } catch {}
           git fetch origin main
           git reset --hard origin/main
           D:\itsp-backend\venv\Scripts\pip.exe install -r requirements.txt
-          pm2 restart itsp-backend
-          pm2 save
-          pm2 list
+          & $pm2Cmd restart itsp-backend
+          & $pm2Cmd save
+          & $pm2Cmd list
 
       - name: Health check :8004
         run: |
