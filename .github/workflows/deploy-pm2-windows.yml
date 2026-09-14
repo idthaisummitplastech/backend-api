@@ -62,6 +62,20 @@ jobs:
       - name: Health check :8004
         run: |
           $ErrorActionPreference = "Stop"
-          Start-Sleep -Seconds 8
-          Invoke-RestMethod http://localhost:8004/health | Out-String | Write-Host
-          Invoke-RestMethod http://localhost:8004/ | Out-String | Write-Host
+          $ok = $false
+          for ($i = 1; $i -le 10; $i++) {
+            Start-Sleep -Seconds 3
+            try {
+              $h = Invoke-RestMethod http://localhost:8004/health -TimeoutSec 3
+              if ($h.status -eq 'healthy') {
+                Write-Host "Health check passed on attempt $i : $($h | ConvertTo-Json -Compress)"
+                $ok = $true
+                break
+              }
+            } catch {
+              Write-Host "Waiting for :8004 to be ready (attempt $i/10)..."
+            }
+          }
+          if (-not $ok) {
+            Write-Error "Backend on port 8004 did not respond healthy in 30s"
+          }
