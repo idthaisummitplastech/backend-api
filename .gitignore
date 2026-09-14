@@ -53,3 +53,6 @@ htmlcov/
 
 # Uploaded candidate files
 uploads/
+
+# GitHub Runner (if placed inside app)
+runner/
