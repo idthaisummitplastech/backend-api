@@ -56,3 +56,7 @@ uploads/
 
 # GitHub Runner (if placed inside app)
 runner/
+
+# Local databases / scratch
+*.db
+*.sqlite3
