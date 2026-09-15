@@ -299,8 +299,20 @@ def create_cms_item(
         snake_k = camel_to_snake(k)
         normalized_data[snake_k] = v
 
-    # User special handling: hash password
+    # User special handling: hash password & duplicate check
     if model == "users":
+        user_email = (normalized_data.get("email") or "").strip().lower()
+        if not user_email:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email wajib diisi.")
+        
+        # Check duplicate in Company Profile DB
+        existing_user = db.query(User).filter(User.email.ilike(user_email)).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Email '{user_email}' sudah terdaftar pada pengguna lain. Gunakan alamat email lain.",
+            )
+
         pwd = normalized_data.get("password")
         if pwd and not str(pwd).startswith("$2b$"):
             normalized_data["password"] = get_password_hash(str(pwd))
@@ -308,7 +320,46 @@ def create_cms_item(
             normalized_data["backup_codes"] = json.dumps(normalized_data["backup_codes"])
 
     clean_data = {k: v for k, v in normalized_data.items() if hasattr(crud.model, k) and k not in ["id", "created_at", "updated_at"]}
-    new_item = crud.create(db, obj_in=clean_data)
+    
+    try:
+        new_item = crud.create(db, obj_in=clean_data)
+    except Exception as exc:
+        db.rollback()
+        err_str = str(exc)
+        if "unique" in err_str.lower() or "duplicate" in err_str.lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Data yang Anda masukkan sudah ada di sistem (duplikat). Periksa kembali email atau data unik lainnya.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal menyimpan data: {err_str[:150]}",
+        )
+
+    # If new user has an admin/hr/user_dept role, also sync to Career Portal
+    if model == "users" and normalized_data.get("role") in ["admin", "hr", "user_dept"]:
+        try:
+            email_val = normalized_data.get("email")
+            existing_rec = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email.ilike(email_val)).first()
+            if not existing_rec:
+                base_username = email_val.split("@")[0]
+                username = base_username
+                counter = 1
+                while karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.username == username).first():
+                    username = f"{base_username}{counter}"
+                    counter += 1
+                new_rec = RecruitmentAdmin(
+                    username=username,
+                    name=normalized_data.get("name", username),
+                    email=email_val,
+                    password=normalized_data.get("password"),
+                    role=normalized_data.get("role"),
+                    is_mfa_enabled=bool(normalized_data.get("mfa_enabled", False)),
+                )
+                karir_db.add(new_rec)
+                karir_db.commit()
+        except Exception:
+            karir_db.rollback()
 
     item_dict = {c.name: getattr(new_item, c.name) for c in new_item.__table__.columns}
     if "password" in item_dict:

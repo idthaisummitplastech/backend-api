@@ -42,6 +42,7 @@ def login_cms_user(
         raise HTTPException(status_code=401, detail="Email atau password salah.")
 
     token = create_access_token({"sub": str(user.id), "email": user.email, "role": user.role, "name": user.name})
+    has_secret = bool(user.mfa_secret)
     return {
         "success": True,
         "token": token,
@@ -51,8 +52,10 @@ def login_cms_user(
             "name": user.name,
             "role": user.role,
             "mfa_enabled": user.mfa_enabled,
+            "has_mfa_secret": has_secret,
         },
         "requires_mfa": user.mfa_enabled,
+        "has_mfa_secret": has_secret,
     }
 
 
