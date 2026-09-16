@@ -31,6 +31,7 @@ class NavMenu(Base, TimestampMixin):
     section = Column(String(100), nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    is_maintenance = Column(Boolean, default=False, nullable=False)
     parent_id = Column(Integer, ForeignKey("nav_menus.id", ondelete="CASCADE"), nullable=True)
 
     children = relationship("NavMenu", backref="parent", remote_side=[id])

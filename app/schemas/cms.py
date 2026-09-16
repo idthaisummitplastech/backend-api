@@ -26,6 +26,7 @@ class NavMenuItem(BaseModel):
     section: Optional[str] = None
     sort_order: int = 0
     is_active: bool = True
+    is_maintenance: bool = False
     parent_id: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
