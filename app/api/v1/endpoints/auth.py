@@ -121,7 +121,7 @@ def login_ats_admin(
                 }
 
             totp = pyotp.TOTP(secret)
-            if not totp.verify(mfa_code, valid_window=12):
+            if not totp.verify(mfa_code, valid_window=30):
                 raise HTTPException(status_code=401, detail="Kode verifikasi 6-digit tidak valid atau sudah kedaluwarsa.")
 
             cms_user.mfa_enabled = True
@@ -134,14 +134,14 @@ def login_ats_admin(
                 }
 
             totp = pyotp.TOTP(cms_user.mfa_secret)
-            is_valid = totp.verify(mfa_code, valid_window=12)
+            is_valid = totp.verify(mfa_code, valid_window=30)
 
             # Fallback: check against recruitment_admins secret
             if not is_valid:
                 ats_admin = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email == cms_user.email).first()
                 if ats_admin and ats_admin.mfa_secret:
                     totp2 = pyotp.TOTP(ats_admin.mfa_secret)
-                    if totp2.verify(mfa_code, valid_window=12):
+                    if totp2.verify(mfa_code, valid_window=30):
                         is_valid = True
                         cms_user.mfa_secret = ats_admin.mfa_secret
                         cms_user.mfa_enabled = True
@@ -244,7 +244,7 @@ def login_ats_admin(
             }
 
         totp = pyotp.TOTP(secret)
-        if not totp.verify(mfa_code, valid_window=12):
+        if not totp.verify(mfa_code, valid_window=30):
             raise HTTPException(status_code=401, detail="Kode MFA 6-digit tidak valid.")
 
         local_admin.is_mfa_enabled = True
@@ -257,7 +257,7 @@ def login_ats_admin(
             }
 
         totp = pyotp.TOTP(local_admin.mfa_secret)
-        if not totp.verify(mfa_code, valid_window=12):
+        if not totp.verify(mfa_code, valid_window=30):
             raise HTTPException(status_code=401, detail="Kode MFA 6-digit tidak valid.")
 
     token = create_access_token(
