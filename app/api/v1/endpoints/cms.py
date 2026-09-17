@@ -236,7 +236,36 @@ def get_cms_items(
     elif hasattr(crud.model, "id"):
         order_col = crud.model.id.asc() if model == "users" else crud.model.id.desc()
 
-    items = crud.get_multi(db, limit=300, order_by=order_col)
+    if model == "nav-menus":
+        try:
+            from sqlalchemy import text
+            db.execute(text("ALTER TABLE nav_menus ADD COLUMN IF NOT EXISTS is_maintenance BOOLEAN DEFAULT FALSE;"))
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    try:
+        items = crud.get_multi(db, limit=300, order_by=order_col)
+    except Exception as exc:
+        db.rollback()
+        if model == "nav-menus":
+            from sqlalchemy import text
+            try:
+                db.execute(text("ALTER TABLE nav_menus ADD COLUMN IF NOT EXISTS is_maintenance BOOLEAN DEFAULT FALSE;"))
+                db.commit()
+                items = crud.get_multi(db, limit=300, order_by=order_col)
+            except Exception:
+                db.rollback()
+                # Direct fallback query excluding is_maintenance if DB schema has issues
+                rows = db.execute(text("SELECT id, title, url, location, section, sort_order, is_active, parent_id, created_at, updated_at FROM nav_menus ORDER BY sort_order ASC")).fetchall()
+                results = []
+                for r in rows:
+                    row_dict = dict(r._mapping)
+                    row_dict["is_maintenance"] = False
+                    results.append(row_dict)
+                return ApiResponse(data=results)
+        else:
+            raise exc
 
     results = []
     for item in items:

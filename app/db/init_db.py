@@ -20,6 +20,11 @@ def init_db(db: Session) -> None:
     Base.metadata.create_all(bind=engine)
     try:
         Base.metadata.create_all(bind=engine_company)
+        # Auto-migration: ensure newly added columns exist in existing production DB tables
+        from sqlalchemy import text
+        with engine_company.connect() as conn:
+            conn.execute(text("ALTER TABLE nav_menus ADD COLUMN IF NOT EXISTS is_maintenance BOOLEAN DEFAULT FALSE;"))
+            conn.commit()
         logger.info("Company CMS tables synchronized (web_perusahaan).")
         seed_company_cms()
     except Exception as e:
