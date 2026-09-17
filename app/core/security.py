@@ -83,8 +83,8 @@ def generate_totp_uri(secret: str, username: str, issuer: str = "PT ITSP Recruit
     return totp.provisioning_uri(name=username, issuer_name=issuer)
 
 
-def verify_totp(secret: str, code: str, valid_window: int = 1) -> bool:
-    """Verify time-based one-time password with a 1-step drift window (30 seconds allowance)."""
+def verify_totp(secret: str, code: str, valid_window: int = 30) -> bool:
+    """Verify time-based one-time password with a drift window (allows up to ±15 minutes tolerance)."""
     if not secret or not code:
         return False
     try:

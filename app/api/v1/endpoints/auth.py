@@ -440,7 +440,9 @@ def verify_cms_mfa(
         raise HTTPException(status_code=400, detail="Konfigurasi MFA pengguna tidak valid.")
 
     totp = pyotp.TOTP(user.mfa_secret)
-    is_valid = totp.verify(code, valid_window=1)
+    # Mengizinkan toleransi perbedaan waktu hingga ±15 menit (30 step x 30 detik)
+    # untuk mengatasi clock drift antara jam HP dan laptop/server.
+    is_valid = totp.verify(code, valid_window=30)
     used_backup = False
 
     if not is_valid and user.backup_codes:
@@ -525,7 +527,7 @@ def verify_ats_admin_mfa(
             raise HTTPException(status_code=400, detail="Secret MFA belum diinisialisasi.")
 
         totp = pyotp.TOTP(admin.mfa_secret)
-        if not totp.verify(code, valid_window=12):
+        if not totp.verify(code, valid_window=30):
             raise HTTPException(
                 status_code=400,
                 detail="Kode verifikasi 6-digit tidak valid atau sudah kedaluwarsa. Pastikan jam HP dan laptop/server sudah sinkron (WIB UTC+7).",
