@@ -8,6 +8,7 @@ from sqlalchemy import (
     Text,
     Numeric,
     ForeignKey,
+    JSON,
 )
 from sqlalchemy.orm import relationship
 from app.db.base_class import Base, TimestampMixin
@@ -220,5 +221,22 @@ class SustainabilityReport(Base, TimestampMixin):
     file_type = Column(String(20), default="PDF", nullable=False)
     file_size = Column(String(50), nullable=True)
     tag = Column(String(100), nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+
+class CustomPage(Base, TimestampMixin):
+    """Dynamic custom pages (Gallery, Rich Text, Documents) managed via CMS."""
+
+    __tablename__ = "custom_pages"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    title = Column(String(255), nullable=False)
+    slug = Column(String(120), unique=True, index=True, nullable=False)
+    template_type = Column(String(50), default="gallery", nullable=False)
+    content = Column(Text, nullable=True)
+    gallery_images = Column(JSON, default=list, nullable=True)
+    meta_title = Column(String(255), nullable=True)
+    meta_description = Column(Text, nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)

@@ -19,6 +19,7 @@ from app.models.cms import (
     Certification,
     Facility,
     SustainabilityReport,
+    CustomPage,
 )
 from app.models.auth import User
 
@@ -46,6 +47,7 @@ class CMSModelRegistry:
         "certifications": Certification,
         "facilities": Facility,
         "sustainability-reports": SustainabilityReport,
+        "pages": CustomPage,
         "users": User,
     }
 
