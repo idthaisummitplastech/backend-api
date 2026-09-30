@@ -9,6 +9,7 @@ from app.crud.crud_recruitment import (
     crud_submission,
     crud_karyawan,
     crud_setting,
+    is_dept_match,
 )
 from app.crud.crud_cms import CMSModelRegistry, crud_contact
 

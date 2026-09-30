@@ -9,9 +9,13 @@ class Token(BaseModel):
     expires_in: int
     role: str
     name: str
+    full_name: Optional[str] = None
+    fullName: Optional[str] = None
     email: str
     department: Optional[str] = None
     requires_mfa: bool = False
+    id: Optional[int] = None
+    applicant_id: Optional[int] = None
 
 
 class TokenPayload(BaseModel):

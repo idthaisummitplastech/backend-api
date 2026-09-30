@@ -4,10 +4,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.crud.crud_recruitment import crud_karyawan, crud_setting, crud_applicant, crud_submission
+from app.crud.crud_recruitment import (
+    crud_karyawan,
+    crud_setting,
+    crud_applicant,
+    crud_submission,
+    crud_data_karyawan,
+)
 from app.crud.crud_auth import crud_admin
 from app.models.auth import RecruitmentAdmin
-from app.models.recruitment import Applicant, KaryawanSementara, InterviewSchedule, TestSubmission
+from app.models.recruitment import (
+    Applicant,
+    KaryawanSementara,
+    InterviewSchedule,
+    TestSubmission,
+    DataKaryawan,
+)
 from app.schemas.recruitment import (
     AdvanceStageRequest,
     KaryawanSementaraResponse,
@@ -38,7 +50,12 @@ def advance_stage_action(
     Enforces strict RBAC and departmental isolation.
     """
     result = recruitment_service.process_stage_action(db, admin=current_admin, payload=payload)
-    return ApiResponse(message=result["message"])
+    return {
+        "success": True,
+        "message": result["message"],
+        "email_sent": result.get("email_sent", True),
+        "email_error": result.get("email_error", None),
+    }
 
 
 @router.post("/cleanup-applicants")
@@ -145,6 +162,10 @@ def schedule_interview(
         except Exception:
             scheduled_at = datetime.strptime(scheduled_at_str[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
 
+    resolved_loc = payload.get("location_address") or payload.get("locationAddress") or payload.get("location")
+    resolved_maps = payload.get("maps_url") or payload.get("mapsUrl") or payload.get("maps")
+    resolved_room = payload.get("room_name") or payload.get("roomName") or payload.get("room")
+
     schedule = InterviewSchedule(
         applicant_id=applicant.id,
         interview_type=interview_type,
@@ -153,6 +174,9 @@ def schedule_interview(
         meeting_platform=meeting_platform,
         meeting_link=meeting_link,
         meeting_passcode=meeting_passcode,
+        location_address=resolved_loc,
+        maps_url=resolved_maps,
+        room_name=resolved_room,
         interviewer_name=interviewer_name,
         notes=notes,
         status="scheduled",
@@ -160,14 +184,34 @@ def schedule_interview(
     db.add(schedule)
     db.commit()
 
+    # Send official invitation email with maps URL
+    job_title = applicant.job_posting.title if applicant.job_posting else "Posisi Terkait"
+    email_service.send_interview_invitation(
+        to_email=applicant.email,
+        name=applicant.full_name,
+        position=job_title,
+        interview_type=interview_type,
+        scheduled_at=schedule.scheduled_at,
+        location_mode=location_mode,
+        meeting_platform=meeting_platform,
+        meeting_link=meeting_link,
+        meeting_passcode=meeting_passcode,
+        location_address=schedule.location_address,
+        maps_url=schedule.maps_url,
+        room_name=schedule.room_name,
+        interviewer_name=interviewer_name,
+        notes=notes,
+    )
+
     return {
         "success": True,
-        "message": f"Jadwal wawancara ({interview_type.upper()}) berhasil ditetapkan.",
+        "message": f"Jadwal wawancara ({interview_type.upper()}) berhasil ditetapkan dan undangan telah dikirimkan ke email kandidat.",
         "interview": {
             "id": schedule.id,
             "interview_type": schedule.interview_type,
             "scheduled_at": schedule.scheduled_at,
             "meeting_link": schedule.meeting_link,
+            "maps_url": schedule.maps_url,
         }
     }
 
@@ -201,7 +245,7 @@ def reset_applicant_password(
 def reset_applicant_test(
     payload: Dict[str, Any],
     db: Session = Depends(get_db),
-    _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "admin"])),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "user_dept", "admin"])),
 ):
     """Reset candidate exam session (clear lock & violations)."""
     applicant_id = int(payload.get("applicant_id") or payload.get("applicantId") or 0)
@@ -215,11 +259,11 @@ def reset_applicant_test(
         query = query.filter(TestSubmission.test_type == test_type)
 
     submissions = query.all()
+    if not submissions:
+        raise HTTPException(status_code=404, detail="Tidak ada data sesi ujian yang ditemukan untuk pelamar ini.")
+
     for sub in submissions:
-        sub.is_locked = False
-        sub.violations_count = 0
-        sub.submitted_at = None
-        sub.score = 0
+        db.delete(sub)
     db.commit()
 
     return {"success": True, "message": f"Sesi ujian berhasil direset. Pelamar dapat mengakses kembali ujian."}
@@ -402,7 +446,13 @@ def get_karyawan_sementara_list(
 ):
     """Retrieve pre-onboarded candidates ready for ID card issuance and HRIS sync."""
     items = crud_karyawan.get_multi(db, limit=200)
-    return ApiResponse(data=[KaryawanSementaraResponse.model_validate(k) for k in items])
+    result = []
+    for k in items:
+        resp = KaryawanSementaraResponse.model_validate(k)
+        if not resp.photo_url and k.applicant and k.applicant.photo_file:
+            resp.photo_url = k.applicant.photo_file
+        result.append(resp)
+    return ApiResponse(data=result)
 
 
 @router.put("/karyawan-sementara/{id}/toggle-id-card", response_model=StatusResponse)
@@ -440,4 +490,433 @@ def update_recruitment_settings(
     for key, value in payload.items():
         crud_setting.set_value(db, key=key, value=value)
     return StatusResponse(message="Pengaturan sistem rekrutmen berhasil diperbarui.")
+
+
+# --- OFFICIAL COMPANY EMPLOYEES & CONTRACT SIGNING ---
+
+@router.get("/employee-sequence")
+def get_employee_sequence(
+    join_date: Optional[str] = Query(None),
+    custom_seq: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "admin"])),
+):
+    """Preview next sequential employee ID in format {id}.{MM}.{YY}."""
+    info = crud_data_karyawan.preview_next_employee_id(db, join_date_val=join_date, custom_sequence=custom_seq)
+    return {"success": True, **info}
+
+
+@router.post("/employee-sequence")
+def set_employee_sequence(
+    payload: Dict[str, Any],
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "admin"])),
+):
+    """Set/adjust the last employee sequence number."""
+    seq = int(payload.get("sequence") or payload.get("last_sequence") or 0)
+    if seq <= 0:
+        raise HTTPException(status_code=400, detail="Nomor sequence harus lebih besar dari 0.")
+    crud_data_karyawan.set_last_sequence(db, seq)
+    return {"success": True, "message": f"Nomor urut ID terakhir berhasil disesuaikan menjadi: {seq}."}
+
+
+@router.post("/hire-contract")
+def hire_and_sign_contract(
+    payload: Dict[str, Any],
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "admin"])),
+):
+    """
+    Official contract signing & employee onboarding by HR:
+    - Transfers all applicant personal data & files to data_karyawan
+    - Automatically assigns sequential employee ID {id}.{MM}.{YY} (e.g. 1530.09.26)
+    - Saves contract start date (Join Date) and contract end date
+    - Updates applicant status to hired and removes all action buttons in ATS
+    """
+    applicant_id = int(payload.get("applicant_id") or payload.get("applicantId") or 0)
+    if not applicant_id:
+        raise HTTPException(status_code=400, detail="ID Pelamar wajib disertakan.")
+
+    applicant = crud_applicant.get_with_details(db, applicant_id)
+    if not applicant:
+        raise HTTPException(status_code=404, detail="Data pelamar tidak ditemukan.")
+
+    # Check if already hired
+    existing_emp = crud_data_karyawan.get_by_applicant_id(db, applicant.id)
+    if existing_emp:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Kandidat ini sudah terdaftar sebagai karyawan resmi dengan ID: {existing_emp.employee_id}."
+        )
+
+    # Parse contract dates
+    start_date_raw = payload.get("contract_start_date") or payload.get("contractStartDate") or applicant.offering_join_date
+    end_date_raw = payload.get("contract_end_date") or payload.get("contractEndDate")
+
+    start_dt = None
+    if start_date_raw:
+        try:
+            start_dt = datetime.fromisoformat(str(start_date_raw)[:10]).replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+    if not start_dt:
+        start_dt = datetime.now(timezone.utc)
+
+    end_dt = None
+    if end_date_raw:
+        try:
+            end_dt = datetime.fromisoformat(str(end_date_raw)[:10]).replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+
+    custom_seq = payload.get("sequence_number") or payload.get("sequenceNumber")
+    if custom_seq:
+        custom_seq = int(custom_seq)
+
+    preview = crud_data_karyawan.preview_next_employee_id(db, join_date_val=start_dt, custom_sequence=custom_seq)
+    employee_id = preview["employee_id"]
+    seq_number = preview["next_sequence"]
+
+    # Calculate duration in months
+    duration_months = 12
+    if end_dt and start_dt:
+        diff_days = (end_dt - start_dt).days
+        duration_months = max(1, round(diff_days / 30.4))
+
+    dept = payload.get("department") or (applicant.job_posting.department if applicant.job_posting else "General")
+    title = payload.get("job_title") or (applicant.job_posting.title if applicant.job_posting else "Karyawan")
+    loc = payload.get("work_location") or "Plant PT ITSP Karawang"
+    sal = payload.get("salary") or applicant.offering_salary or "Sesuai Standar Perusahaan"
+    c_status = payload.get("contract_status") or "PKWT 1"
+
+    emp = DataKaryawan(
+        employee_id=employee_id,
+        sequence_number=seq_number,
+        applicant_id=applicant.id,
+        full_name=applicant.full_name,
+        first_name=applicant.first_name,
+        last_name=applicant.last_name,
+        nik=applicant.nik,
+        email=applicant.email,
+        phone=applicant.phone,
+        birth_place=applicant.birth_place,
+        birth_date=applicant.birth_date,
+        age=applicant.age,
+        gender=applicant.gender,
+        religion=applicant.religion,
+        ethnic=applicant.ethnic,
+        height_cm=applicant.height_cm,
+        weight_kg=applicant.weight_kg,
+        marriage_status=applicant.marriage_status,
+        blood_type=payload.get("blood_type"),
+        address_ktp=applicant.address_ktp,
+        province_ktp=applicant.province_ktp,
+        city_ktp=applicant.city_ktp,
+        district_ktp=applicant.district_ktp,
+        village_ktp=applicant.village_ktp,
+        rt_ktp=applicant.rt_ktp,
+        rw_ktp=applicant.rw_ktp,
+        street_ktp=applicant.street_ktp,
+        domicile_same_as_ktp=applicant.domicile_same_as_ktp,
+        address_domicile=applicant.address_domicile,
+        province_domicile=applicant.province_domicile,
+        city_domicile=applicant.city_domicile,
+        district_domicile=applicant.district_domicile,
+        village_domicile=applicant.village_domicile,
+        rt_domicile=applicant.rt_domicile,
+        rw_domicile=applicant.rw_domicile,
+        street_domicile=applicant.street_domicile,
+        last_education=applicant.last_education,
+        school_name=applicant.school_name,
+        major=applicant.major,
+        education_history=applicant.education_history,
+        work_history=applicant.work_history,
+        family_parents=applicant.family_parents,
+        family_siblings=applicant.family_siblings,
+        job_title=title,
+        department=dept,
+        work_location=loc,
+        salary=sal,
+        contract_start_date=start_dt,
+        contract_end_date=end_dt,
+        contract_duration_months=duration_months,
+        contract_status=c_status,
+        employee_status="active",
+        photo_file=applicant.photo_file,
+        ktp_file=applicant.ktp_file,
+        kk_file=applicant.kk_file,
+        ijazah_file=applicant.ijazah_file,
+        transkrip_file=applicant.transkrip_file,
+        npwp_file=applicant.npwp_file,
+        bpjs_kesehatan_file=applicant.bpjs_kesehatan_file,
+        bpjs_ketenagakerjaan_file=applicant.bpjs_ketenagakerjaan_file,
+        skck_file=applicant.skck_file,
+        cv_file=applicant.cv_file,
+        signed_contract_file=applicant.signed_contract_file,
+        hired_at=datetime.now(timezone.utc),
+        notes=payload.get("notes"),
+    )
+
+    db.add(emp)
+
+    # Mark applicant as hired & employee
+    applicant.is_employee = True
+    applicant.employee_id = employee_id
+    applicant.stage_status = "hired"
+
+    # Update sequence tracker
+    crud_data_karyawan.set_last_sequence(db, seq_number)
+
+    db.commit()
+    db.refresh(emp)
+
+    return {
+        "success": True,
+        "message": f"Penandatanganan kontrak selesai! {applicant.full_name} resmi diangkat sebagai karyawan PT ITSP dengan Nomor ID: {employee_id}.",
+        "employee_id": employee_id,
+        "employee": {
+            "id": emp.id,
+            "employee_id": emp.employee_id,
+            "full_name": emp.full_name,
+            "department": emp.department,
+            "job_title": emp.job_title,
+            "contract_start_date": emp.contract_start_date.isoformat() if emp.contract_start_date else None,
+            "contract_end_date": emp.contract_end_date.isoformat() if emp.contract_end_date else None,
+            "contract_status": emp.contract_status,
+        },
+    }
+
+
+@router.get("/employees")
+def get_employees_list(
+    department: Optional[str] = Query(None),
+    contract_status: Optional[str] = Query(None),
+    employee_status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "admin"])),
+):
+    """Retrieve full employee lists with filter and search."""
+    query = db.query(DataKaryawan)
+    if department:
+        query = query.filter(DataKaryawan.department.ilike(f"%{department.strip()}%"))
+    if contract_status:
+        query = query.filter(DataKaryawan.contract_status == contract_status)
+    if employee_status:
+        query = query.filter(DataKaryawan.employee_status == employee_status)
+    if search:
+        s = f"%{search.strip()}%"
+        query = query.filter(
+            (DataKaryawan.full_name.ilike(s)) |
+            (DataKaryawan.employee_id.ilike(s)) |
+            (DataKaryawan.nik.ilike(s)) |
+            (DataKaryawan.email.ilike(s)) |
+            (DataKaryawan.job_title.ilike(s))
+        )
+
+    employees = query.order_by(DataKaryawan.sequence_number.desc(), DataKaryawan.id.desc()).all()
+    return {
+        "success": True,
+        "total": len(employees),
+        "employees": [
+            {
+                "id": e.id,
+                "employee_id": e.employee_id,
+                "sequence_number": e.sequence_number,
+                "applicant_id": e.applicant_id,
+                "full_name": e.full_name,
+                "first_name": e.first_name,
+                "last_name": e.last_name,
+                "nik": e.nik,
+                "email": e.email,
+                "phone": e.phone,
+                "birth_place": e.birth_place,
+                "birth_date": e.birth_date.isoformat() if e.birth_date else None,
+                "age": e.age,
+                "gender": e.gender,
+                "religion": e.religion,
+                "ethnic": e.ethnic,
+                "height_cm": e.height_cm,
+                "weight_kg": e.weight_kg,
+                "marriage_status": e.marriage_status,
+                "blood_type": e.blood_type,
+                "address_ktp": e.address_ktp,
+                "city_ktp": e.city_ktp,
+                "province_ktp": e.province_ktp,
+                "address_domicile": e.address_domicile,
+                "last_education": e.last_education,
+                "school_name": e.school_name,
+                "major": e.major,
+                "education_history": e.education_history,
+                "work_history": e.work_history,
+                "family_parents": e.family_parents,
+                "family_siblings": e.family_siblings,
+                "job_title": e.job_title,
+                "department": e.department,
+                "work_location": e.work_location,
+                "salary": e.salary,
+                "contract_start_date": e.contract_start_date.isoformat() if e.contract_start_date else None,
+                "contract_end_date": e.contract_end_date.isoformat() if e.contract_end_date else None,
+                "contract_duration_months": e.contract_duration_months,
+                "contract_status": e.contract_status,
+                "employee_status": e.employee_status,
+                "photo_file": e.photo_file,
+                "ktp_file": e.ktp_file,
+                "kk_file": e.kk_file,
+                "ijazah_file": e.ijazah_file,
+                "npwp_file": e.npwp_file,
+                "bpjs_kesehatan_file": e.bpjs_kesehatan_file,
+                "bpjs_ketenagakerjaan_file": e.bpjs_ketenagakerjaan_file,
+                "skck_file": e.skck_file,
+                "signed_contract_file": e.signed_contract_file,
+                "hired_at": e.hired_at.isoformat() if e.hired_at else None,
+                "notes": e.notes,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in employees
+        ]
+    }
+
+
+@router.get("/employees/{id}")
+def get_employee_detail(
+    id: int,
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "admin"])),
+):
+    """Retrieve complete profile of a single employee."""
+    emp = crud_data_karyawan.get(db, id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Data karyawan tidak ditemukan.")
+
+    return {
+        "success": True,
+        "employee": {
+            "id": emp.id,
+            "employee_id": emp.employee_id,
+            "sequence_number": emp.sequence_number,
+            "applicant_id": emp.applicant_id,
+            "full_name": emp.full_name,
+            "first_name": emp.first_name,
+            "last_name": emp.last_name,
+            "nik": emp.nik,
+            "email": emp.email,
+            "phone": emp.phone,
+            "birth_place": emp.birth_place,
+            "birth_date": emp.birth_date.isoformat() if emp.birth_date else None,
+            "age": emp.age,
+            "gender": emp.gender,
+            "religion": emp.religion,
+            "ethnic": emp.ethnic,
+            "height_cm": emp.height_cm,
+            "weight_kg": emp.weight_kg,
+            "marriage_status": emp.marriage_status,
+            "blood_type": emp.blood_type,
+            "address_ktp": emp.address_ktp,
+            "province_ktp": emp.province_ktp,
+            "city_ktp": emp.city_ktp,
+            "district_ktp": emp.district_ktp,
+            "village_ktp": emp.village_ktp,
+            "rt_ktp": emp.rt_ktp,
+            "rw_ktp": emp.rw_ktp,
+            "street_ktp": emp.street_ktp,
+            "domicile_same_as_ktp": emp.domicile_same_as_ktp,
+            "address_domicile": emp.address_domicile,
+            "province_domicile": emp.province_domicile,
+            "city_domicile": emp.city_domicile,
+            "district_domicile": emp.district_domicile,
+            "village_domicile": emp.village_domicile,
+            "rt_domicile": emp.rt_domicile,
+            "rw_domicile": emp.rw_domicile,
+            "street_domicile": emp.street_domicile,
+            "last_education": emp.last_education,
+            "school_name": emp.school_name,
+            "major": emp.major,
+            "education_history": emp.education_history,
+            "work_history": emp.work_history,
+            "family_parents": emp.family_parents,
+            "family_siblings": emp.family_siblings,
+            "job_title": emp.job_title,
+            "department": emp.department,
+            "work_location": emp.work_location,
+            "salary": emp.salary,
+            "contract_start_date": emp.contract_start_date.isoformat() if emp.contract_start_date else None,
+            "contract_end_date": emp.contract_end_date.isoformat() if emp.contract_end_date else None,
+            "contract_duration_months": emp.contract_duration_months,
+            "contract_status": emp.contract_status,
+            "employee_status": emp.employee_status,
+            "photo_file": emp.photo_file,
+            "ktp_file": emp.ktp_file,
+            "kk_file": emp.kk_file,
+            "ijazah_file": emp.ijazah_file,
+            "transkrip_file": emp.transkrip_file,
+            "npwp_file": emp.npwp_file,
+            "bpjs_kesehatan_file": emp.bpjs_kesehatan_file,
+            "bpjs_ketenagakerjaan_file": emp.bpjs_ketenagakerjaan_file,
+            "skck_file": emp.skck_file,
+            "cv_file": emp.cv_file,
+            "signed_contract_file": emp.signed_contract_file,
+            "hired_at": emp.hired_at.isoformat() if emp.hired_at else None,
+            "notes": emp.notes,
+            "created_at": emp.created_at.isoformat() if emp.created_at else None,
+        }
+    }
+
+
+@router.put("/employees/{id}")
+def update_employee(
+    id: int,
+    payload: Dict[str, Any],
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "admin"])),
+):
+    """Update employee details or contract renewal."""
+    emp = crud_data_karyawan.get(db, id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Data karyawan tidak ditemukan.")
+
+    for field in [
+        "full_name", "phone", "email", "job_title", "department", "work_location",
+        "salary", "contract_status", "employee_status", "notes", "blood_type",
+        "marriage_status", "address_ktp", "address_domicile",
+    ]:
+        if field in payload:
+            setattr(emp, field, payload[field])
+
+    if "contract_start_date" in payload and payload["contract_start_date"]:
+        try:
+            emp.contract_start_date = datetime.fromisoformat(str(payload["contract_start_date"])[:10]).replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+
+    if "contract_end_date" in payload and payload["contract_end_date"]:
+        try:
+            emp.contract_end_date = datetime.fromisoformat(str(payload["contract_end_date"])[:10]).replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+
+    db.commit()
+    return {"success": True, "message": "Data karyawan berhasil diperbarui."}
+
+
+@router.delete("/employees/{id}")
+def delete_employee(
+    id: int,
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["admin"])),
+):
+    """Delete employee record (Super Admin only)."""
+    emp = crud_data_karyawan.get(db, id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Data karyawan tidak ditemukan.")
+
+    # Revert applicant employee flag if linked
+    if emp.applicant_id:
+        app = crud_applicant.get(db, emp.applicant_id)
+        if app:
+            app.is_employee = False
+            app.employee_id = None
+
+    crud_data_karyawan.remove(db, id=id)
+    return {"success": True, "message": "Data karyawan berhasil dihapus."}
 

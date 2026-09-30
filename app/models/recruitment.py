@@ -51,6 +51,57 @@ class Applicant(Base):
     cv_file = Column(Text, nullable=False)  # Base64 or secure stored file path
     cv_file_size = Column(Integer, default=0, nullable=False)
 
+    # Extended Identity Fields
+    nik = Column(String(50), nullable=True)
+    first_name = Column(String(150), nullable=True)
+    last_name = Column(String(150), nullable=True)
+    gender = Column(String(50), nullable=True)
+    religion = Column(String(50), nullable=True)
+    ethnic = Column(String(50), nullable=True)
+    height_cm = Column(Integer, nullable=True)
+    weight_kg = Column(Integer, nullable=True)
+    marriage_status = Column(String(50), nullable=True)
+    birth_place = Column(String(150), nullable=True)
+
+    # Extended Address Fields (KTP & Domicile)
+    address_ktp = Column(Text, nullable=True)
+    province_ktp = Column(String(100), nullable=True)
+    city_ktp = Column(String(100), nullable=True)
+    district_ktp = Column(String(100), nullable=True)
+    village_ktp = Column(String(100), nullable=True)
+    rt_ktp = Column(String(20), nullable=True)
+    rw_ktp = Column(String(20), nullable=True)
+    street_ktp = Column(String(255), nullable=True)
+
+    domicile_same_as_ktp = Column(Boolean, default=True, nullable=True)
+    address_domicile = Column(Text, nullable=True)
+    province_domicile = Column(String(100), nullable=True)
+    city_domicile = Column(String(100), nullable=True)
+    district_domicile = Column(String(100), nullable=True)
+    village_domicile = Column(String(100), nullable=True)
+    rt_domicile = Column(String(20), nullable=True)
+    rw_domicile = Column(String(20), nullable=True)
+    street_domicile = Column(String(255), nullable=True)
+
+    # Extended Document Upload Fields
+    photo_file = Column(Text, nullable=True)
+    ktp_file = Column(Text, nullable=True)
+    kk_file = Column(Text, nullable=True)
+    ijazah_file = Column(Text, nullable=True)
+    transkrip_file = Column(Text, nullable=True)
+    cert_nonformal_file = Column(Text, nullable=True)
+    bpjs_kesehatan_file = Column(Text, nullable=True)
+    bpjs_ketenagakerjaan_file = Column(Text, nullable=True)
+    npwp_file = Column(Text, nullable=True)
+    akta_file = Column(Text, nullable=True)
+    skck_file = Column(Text, nullable=True)
+
+    # Structured History & Family Data (JSON strings)
+    education_history = Column(Text, nullable=True)
+    work_history = Column(Text, nullable=True)
+    family_parents = Column(Text, nullable=True)
+    family_siblings = Column(Text, nullable=True)
+
     # 7-Stage Progress Tracker
     current_stage = Column(Integer, default=1, nullable=False)  # Stages 1 to 7
     stage_status = Column(String(50), default="in_progress", nullable=False)  # in_progress, passed, failed
@@ -60,21 +111,35 @@ class Applicant(Base):
     # Stage 1: Screening Notes
     screening_notes = Column(Text, nullable=True)
 
-    # Stage 2 & 3: Online Test Schedule, Token & Venue
+    # Stage 2 & 3: Online Test Schedule, Token, Duration & Venue
     psikotes_scheduled_at = Column(DateTime(timezone=True), nullable=True)
+    psikotes_duration_minutes = Column(Integer, default=60, nullable=True)
     psikotes_token = Column(String(50), nullable=True)
     psikotes_location = Column(String(255), default="Portal Karir Online PT ITSP", nullable=False)
+    psikotes_maps_url = Column(String(500), nullable=True)
 
     user_test_scheduled_at = Column(DateTime(timezone=True), nullable=True)
+    user_test_duration_minutes = Column(Integer, default=60, nullable=True)
     user_test_token = Column(String(50), nullable=True)
     user_test_location = Column(String(255), default="Portal Karir Online PT ITSP", nullable=False)
+    user_test_maps_url = Column(String(500), nullable=True)
 
     # Stage 6 & 7: Medical & Offering
     mcu_notes = Column(Text, nullable=True)
     offering_letter = Column(Text, nullable=True)
     offering_salary = Column(String(100), nullable=True)
     offering_status = Column(String(50), default="pending", nullable=False)  # pending, issued, accepted, rejected
+    offering_attachment = Column(Text, nullable=True)  # PDF attachment data URI / URL from HR
+    offering_clauses = Column(Text, nullable=True)  # Editable clauses / terms by HR
+    offering_signer_name = Column(String(150), nullable=True)  # Name of HR signatory
+    offering_signer_title = Column(String(150), nullable=True)  # Title / Department of HR signatory
+    offering_signer_signature = Column(Text, nullable=True)  # Digital signature (Base64 data URL) of HR
+    offering_join_date = Column(String(100), nullable=True)  # Tanggal mulai bekerja
+    offering_ref_number = Column(String(100), nullable=True)  # Nomor surat resmi korporat
+    signed_contract_file = Column(Text, nullable=True)  # PDF signed by applicant
     contract_signed_at = Column(DateTime(timezone=True), nullable=True)
+    is_employee = Column(Boolean, default=False, nullable=False)
+    employee_id = Column(String(50), nullable=True)  # NIK Karyawan resmi misal 1530.09.26
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
@@ -83,6 +148,7 @@ class Applicant(Base):
     test_submissions = relationship("TestSubmission", back_populates="applicant", cascade="all, delete-orphan")
     interviews = relationship("InterviewSchedule", back_populates="applicant", cascade="all, delete-orphan")
     karyawan_data = relationship("KaryawanSementara", back_populates="applicant", uselist=False, cascade="all, delete-orphan")
+    data_karyawan = relationship("DataKaryawan", back_populates="applicant", uselist=False)
 
 
 class InterviewSchedule(Base):
@@ -97,6 +163,7 @@ class InterviewSchedule(Base):
     meeting_link = Column(String(500), nullable=True)
     meeting_passcode = Column(String(100), nullable=True)
     location_address = Column(String(500), nullable=True)
+    maps_url = Column(String(500), nullable=True)
     room_name = Column(String(100), nullable=True)
     interviewer_name = Column(String(200), nullable=True)
     notes = Column(Text, nullable=True)
@@ -176,3 +243,96 @@ class RecruitmentSetting(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+class DataKaryawan(Base):
+    __tablename__ = "data_karyawan"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    employee_id = Column(String(50), unique=True, index=True, nullable=False)  # Format: {id}.{MM}.{YY} e.g. 1530.09.26
+    sequence_number = Column(Integer, index=True, nullable=False)  # e.g. 1530
+    applicant_id = Column(Integer, ForeignKey("applicants.id", ondelete="SET NULL"), unique=True, nullable=True)
+
+    # Identitas Pribadi (lengkap dari formulir pendaftaran)
+    full_name = Column(String(255), nullable=False)
+    first_name = Column(String(150), nullable=True)
+    last_name = Column(String(150), nullable=True)
+    nik = Column(String(50), index=True, nullable=True)  # NIK KTP
+    email = Column(String(255), index=True, nullable=False)
+    phone = Column(String(50), nullable=False)
+    birth_place = Column(String(150), nullable=True)
+    birth_date = Column(DateTime(timezone=True), nullable=True)
+    age = Column(Integer, nullable=True)
+    gender = Column(String(50), nullable=True)
+    religion = Column(String(50), nullable=True)
+    ethnic = Column(String(50), nullable=True)
+    height_cm = Column(Integer, nullable=True)
+    weight_kg = Column(Integer, nullable=True)
+    marriage_status = Column(String(50), nullable=True)
+    blood_type = Column(String(10), nullable=True)
+
+    # Alamat KTP
+    address_ktp = Column(Text, nullable=True)
+    province_ktp = Column(String(100), nullable=True)
+    city_ktp = Column(String(100), nullable=True)
+    district_ktp = Column(String(100), nullable=True)
+    village_ktp = Column(String(100), nullable=True)
+    rt_ktp = Column(String(20), nullable=True)
+    rw_ktp = Column(String(20), nullable=True)
+    street_ktp = Column(String(255), nullable=True)
+
+    # Alamat Domisili
+    domicile_same_as_ktp = Column(Boolean, default=True, nullable=True)
+    address_domicile = Column(Text, nullable=True)
+    province_domicile = Column(String(100), nullable=True)
+    city_domicile = Column(String(100), nullable=True)
+    district_domicile = Column(String(100), nullable=True)
+    village_domicile = Column(String(100), nullable=True)
+    rt_domicile = Column(String(20), nullable=True)
+    rw_domicile = Column(String(20), nullable=True)
+    street_domicile = Column(String(255), nullable=True)
+
+    # Pendidikan & Riwayat
+    last_education = Column(String(100), nullable=True)
+    school_name = Column(String(255), nullable=True)
+    major = Column(String(255), nullable=True)
+    education_history = Column(Text, nullable=True)  # JSON
+    work_history = Column(Text, nullable=True)  # JSON
+    family_parents = Column(Text, nullable=True)  # JSON
+    family_siblings = Column(Text, nullable=True)  # JSON
+
+    # Kepegawaian & Kontrak Kerja Resmi
+    job_title = Column(String(150), nullable=False)
+    department = Column(String(100), index=True, nullable=False)
+    work_location = Column(String(150), default="Plant PT ITSP Karawang", nullable=True)
+    salary = Column(String(100), nullable=True)
+    contract_start_date = Column(DateTime(timezone=True), nullable=False)  # Tanggal Mulai Kontrak
+    contract_end_date = Column(DateTime(timezone=True), nullable=True)  # Tanggal Selesai Kontrak
+    contract_duration_months = Column(Integer, default=12, nullable=True)
+    contract_status = Column(String(50), default="PKWT 1", nullable=False)  # PKWT 1, PKWT 2, PKWTT, Percobaan
+    employee_status = Column(String(50), default="active", nullable=False)  # active, resign, end_of_contract
+
+    # Berkas & Lampiran Dokumen
+    photo_file = Column(Text, nullable=True)
+    ktp_file = Column(Text, nullable=True)
+    kk_file = Column(Text, nullable=True)
+    ijazah_file = Column(Text, nullable=True)
+    transkrip_file = Column(Text, nullable=True)
+    npwp_file = Column(Text, nullable=True)
+    bpjs_kesehatan_file = Column(Text, nullable=True)
+    bpjs_ketenagakerjaan_file = Column(Text, nullable=True)
+    skck_file = Column(Text, nullable=True)
+    cv_file = Column(Text, nullable=True)
+    signed_contract_file = Column(Text, nullable=True)
+
+    hired_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    applicant = relationship("Applicant", back_populates="data_karyawan")

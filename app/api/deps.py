@@ -24,6 +24,28 @@ def get_current_admin(
     # 1. Allow internal service communication from Next.js server actions
     internal_key = request.headers.get("x-internal-secret") or request.headers.get("X-Internal-Secret")
     if internal_key and internal_key == settings.SECRET_KEY:
+        admin_id_hdr = request.headers.get("x-admin-id") or request.headers.get("X-Admin-Id")
+        admin_role_hdr = request.headers.get("x-admin-role") or request.headers.get("X-Admin-Role")
+        admin_dept_hdr = request.headers.get("x-admin-department") or request.headers.get("X-Admin-Department")
+
+        if admin_id_hdr:
+            try:
+                admin_found = crud_admin.get(db, int(admin_id_hdr))
+                if admin_found:
+                    return admin_found
+            except (ValueError, TypeError):
+                pass
+
+        if admin_role_hdr:
+            return RecruitmentAdmin(
+                id=int(admin_id_hdr) if admin_id_hdr and admin_id_hdr.isdigit() else 1,
+                username="admin_internal",
+                name="Internal Service Admin",
+                role=admin_role_hdr.lower(),
+                department=admin_dept_hdr,
+                email="admin@itsp.co.id",
+            )
+
         admin = crud_admin.get_by_username(db, "admin")
         if admin:
             return admin

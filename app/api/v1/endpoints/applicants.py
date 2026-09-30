@@ -46,12 +46,80 @@ def apply_job(
     cv_file = str(payload.get("cv_file") or payload.get("cvBase64") or "")
     cv_file_size = int(payload.get("cv_file_size") or payload.get("cvFileSize") or 0)
 
+    # Extended Identity
+    nik = str(payload.get("nik") or "").strip()
+    first_name = str(payload.get("first_name") or payload.get("firstName") or "").strip()
+    last_name = str(payload.get("last_name") or payload.get("lastName") or "").strip()
+    if not full_name and (first_name or last_name):
+        full_name = f"{first_name} {last_name}".strip()
+    gender = str(payload.get("gender") or "").strip()
+    religion = str(payload.get("religion") or "").strip()
+    ethnic = str(payload.get("ethnic") or "").strip()
+    height_cm = int(payload.get("height_cm") or payload.get("heightCm") or 0) or None
+    weight_kg = int(payload.get("weight_kg") or payload.get("weightKg") or 0) or None
+    marriage_status = str(payload.get("marriage_status") or payload.get("marriageStatus") or "").strip()
+    birth_place = str(payload.get("birth_place") or payload.get("birthPlace") or "").strip()
+
+    # Extended Address
+    address_ktp = str(payload.get("address_ktp") or payload.get("addressKtp") or "").strip()
+    province_ktp = str(payload.get("province_ktp") or payload.get("provinceKtp") or "").strip()
+    city_ktp = str(payload.get("city_ktp") or payload.get("cityKtp") or "").strip()
+    district_ktp = str(payload.get("district_ktp") or payload.get("districtKtp") or "").strip()
+    village_ktp = str(payload.get("village_ktp") or payload.get("villageKtp") or "").strip()
+    rt_ktp = str(payload.get("rt_ktp") or payload.get("rtKtp") or "").strip()
+    rw_ktp = str(payload.get("rw_ktp") or payload.get("rwKtp") or "").strip()
+    street_ktp = str(payload.get("street_ktp") or payload.get("streetKtp") or "").strip()
+
+    domicile_same_as_ktp = bool(payload.get("domicile_same_as_ktp", payload.get("domicileSameAsKtp", True)))
+    address_domicile = str(payload.get("address_domicile") or payload.get("addressDomicile") or "").strip()
+    province_domicile = str(payload.get("province_domicile") or payload.get("provinceDomicile") or "").strip()
+    city_domicile = str(payload.get("city_domicile") or payload.get("cityDomicile") or "").strip()
+    district_domicile = str(payload.get("district_domicile") or payload.get("districtDomicile") or "").strip()
+    village_domicile = str(payload.get("village_domicile") or payload.get("villageDomicile") or "").strip()
+    rt_domicile = str(payload.get("rt_domicile") or payload.get("rtDomicile") or "").strip()
+    rw_domicile = str(payload.get("rw_domicile") or payload.get("rwDomicile") or "").strip()
+    street_domicile = str(payload.get("street_domicile") or payload.get("streetDomicile") or "").strip()
+
+    # Extended Documents
+    photo_file = str(payload.get("photo_file") or payload.get("photoFile") or "")
+    ktp_file = str(payload.get("ktp_file") or payload.get("ktpFile") or "")
+    kk_file = str(payload.get("kk_file") or payload.get("kkFile") or "")
+    ijazah_file = str(payload.get("ijazah_file") or payload.get("ijazahFile") or "")
+    transkrip_file = str(payload.get("transkrip_file") or payload.get("transkripFile") or "")
+    cert_nonformal_file = str(payload.get("cert_nonformal_file") or payload.get("certNonformalFile") or "")
+    bpjs_kesehatan_file = str(payload.get("bpjs_kesehatan_file") or payload.get("bpjsKesehatanFile") or "")
+    bpjs_ketenagakerjaan_file = str(payload.get("bpjs_ketenagakerjaan_file") or payload.get("bpjsKetenagakerjaanFile") or "")
+    npwp_file = str(payload.get("npwp_file") or payload.get("npwpFile") or "")
+    akta_file = str(payload.get("akta_file") or payload.get("aktaFile") or "")
+    skck_file = str(payload.get("skck_file") or payload.get("skckFile") or "")
+
+    # Structured history & family
+    import json
+    edu_raw = payload.get("education_history") or payload.get("educationHistory")
+    education_history = json.dumps(edu_raw) if isinstance(edu_raw, (list, dict)) else str(edu_raw or "")
+
+    work_raw = payload.get("work_history") or payload.get("workHistory")
+    work_history = json.dumps(work_raw) if isinstance(work_raw, (list, dict)) else str(work_raw or "")
+
+    parents_raw = payload.get("family_parents") or payload.get("familyParents")
+    family_parents = json.dumps(parents_raw) if isinstance(parents_raw, (list, dict)) else str(parents_raw or "")
+
+    siblings_raw = payload.get("family_siblings") or payload.get("familySiblings")
+    family_siblings = json.dumps(siblings_raw) if isinstance(siblings_raw, (list, dict)) else str(siblings_raw or "")
+
     # 1. Validation
-    if not (full_name and email and phone and birth_date_str and last_education and school_name and major and job_id and cv_file):
+    if not (full_name and email and phone and birth_date_str and job_id and cv_file):
         raise HTTPException(
             status_code=400,
             detail="Mohon lengkapi seluruh formulir pendaftaran yang bertanda bintang (*).",
         )
+
+    if not last_education:
+        last_education = "SMA/SMK"
+    if not school_name:
+        school_name = "-"
+    if not major:
+        major = "-"
 
     # 2. Check job status and date limits
     job = crud_job.get(db, job_id)
@@ -128,6 +196,49 @@ def apply_job(
         other_languages=other_languages,
         cv_file=cv_file,
         cv_file_size=cv_file_size,
+        # Extended fields
+        nik=nik,
+        first_name=first_name,
+        last_name=last_name,
+        gender=gender,
+        religion=religion,
+        ethnic=ethnic,
+        height_cm=height_cm,
+        weight_kg=weight_kg,
+        marriage_status=marriage_status,
+        birth_place=birth_place,
+        address_ktp=address_ktp,
+        province_ktp=province_ktp,
+        city_ktp=city_ktp,
+        district_ktp=district_ktp,
+        village_ktp=village_ktp,
+        rt_ktp=rt_ktp,
+        rw_ktp=rw_ktp,
+        street_ktp=street_ktp,
+        domicile_same_as_ktp=domicile_same_as_ktp,
+        address_domicile=address_domicile,
+        province_domicile=province_domicile,
+        city_domicile=city_domicile,
+        district_domicile=district_domicile,
+        village_domicile=village_domicile,
+        rt_domicile=rt_domicile,
+        rw_domicile=rw_domicile,
+        street_domicile=street_domicile,
+        photo_file=photo_file,
+        ktp_file=ktp_file,
+        kk_file=kk_file,
+        ijazah_file=ijazah_file,
+        transkrip_file=transkrip_file,
+        cert_nonformal_file=cert_nonformal_file,
+        bpjs_kesehatan_file=bpjs_kesehatan_file,
+        bpjs_ketenagakerjaan_file=bpjs_ketenagakerjaan_file,
+        npwp_file=npwp_file,
+        akta_file=akta_file,
+        skck_file=skck_file,
+        education_history=education_history,
+        work_history=work_history,
+        family_parents=family_parents,
+        family_siblings=family_siblings,
         current_stage=1,
         stage_status="in_progress",
     )
@@ -156,13 +267,14 @@ def apply_job(
 
 @router.get("/status/{applicant_id}")
 def get_applicant_status_details(
-    applicant_id: int,
+    applicant_id: str,
     db: Session = Depends(get_db),
 ):
     """
     Candidate live recruitment status tracker with settings & sanitized submission data.
+    Supports either integer applicant_id or applicant email string.
     """
-    applicant = crud_applicant.get_with_details(db, applicant_id)
+    applicant = crud_applicant.get_with_details_by_identifier(db, applicant_id)
     if not applicant:
         raise HTTPException(status_code=404, detail="Data pelamar tidak ditemukan.")
 
@@ -201,6 +313,12 @@ def get_applicant_status_details(
             "meetingPlatform": iv.meeting_platform,
             "meetingLink": iv.meeting_link,
             "meetingPasscode": iv.meeting_passcode,
+            "locationAddress": iv.location_address,
+            "location_address": iv.location_address,
+            "mapsUrl": iv.maps_url,
+            "maps_url": iv.maps_url,
+            "roomName": iv.room_name,
+            "room_name": iv.room_name,
             "interviewerName": iv.interviewer_name,
             "notes": iv.notes,
             "status": iv.status,
@@ -247,12 +365,32 @@ def get_applicant_status_details(
             "screeningNotes": applicant.screening_notes,
             "psikotesScheduledAt": applicant.psikotes_scheduled_at,
             "psikotesLocation": applicant.psikotes_location or "Portal Karir Online PT ITSP",
+            "psikotesMapsUrl": applicant.psikotes_maps_url,
+            "psikotes_maps_url": applicant.psikotes_maps_url,
             "userTestScheduledAt": applicant.user_test_scheduled_at,
             "userTestLocation": applicant.user_test_location or "Portal Karir Online PT ITSP",
+            "userTestMapsUrl": applicant.user_test_maps_url,
+            "userTest_maps_url": applicant.user_test_maps_url,
             "mcuNotes": applicant.mcu_notes,
             "offeringLetter": applicant.offering_letter,
             "offeringSalary": applicant.offering_salary,
             "offeringStatus": applicant.offering_status,
+            "offeringAttachment": applicant.offering_attachment,
+            "offering_attachment": applicant.offering_attachment,
+            "offeringClauses": applicant.offering_clauses,
+            "offering_clauses": applicant.offering_clauses,
+            "offeringSignerName": applicant.offering_signer_name,
+            "offering_signer_name": applicant.offering_signer_name,
+            "offeringSignerTitle": applicant.offering_signer_title,
+            "offering_signer_title": applicant.offering_signer_title,
+            "offeringSignerSignature": applicant.offering_signer_signature,
+            "offering_signer_signature": applicant.offering_signer_signature,
+            "offeringJoinDate": applicant.offering_join_date,
+            "offering_join_date": applicant.offering_join_date,
+            "offeringRefNumber": applicant.offering_ref_number,
+            "offering_ref_number": applicant.offering_ref_number,
+            "signedContractFile": applicant.signed_contract_file,
+            "signed_contract_file": applicant.signed_contract_file,
             "contractSignedAt": applicant.contract_signed_at,
             "jobPosting": {
                 "id": applicant.job_posting.id,
@@ -292,6 +430,10 @@ def candidate_accept_offer(
     applicant.offering_status = "accepted"
     applicant.stage_status = "passed"
     applicant.contract_signed_at = now
+
+    signed_contract_file = payload.get("signed_contract_file") or payload.get("signedContractFile") or payload.get("signedFile")
+    if signed_contract_file:
+        applicant.signed_contract_file = signed_contract_file
 
     # Generate temporary NIK & Karyawan Data if not exists
     if not applicant.karyawan_data:
@@ -340,7 +482,7 @@ def get_applicants_list(
     if status_filter:
         filters["stage_status"] = status_filter
 
-    applicants = crud_applicant.get_multi(db, limit=300, filters=filters)
+    applicants = crud_applicant.get_multi_with_details(db, limit=300, filters=filters)
 
     # Departmental scoping for User Dept
     if admin.role == "user_dept" and admin.department:
@@ -359,7 +501,7 @@ def get_applicant_detail(
     db: Session = Depends(get_db),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "user_dept", "admin"])),
 ):
-    """Retrieve complete candidate dossier by ID."""
+    """Retrieve complete candidate file/profile by ID (Berkas Lengkap Pelamar)."""
     applicant = crud_applicant.get_with_details(db, id)
     if not applicant:
         raise HTTPException(status_code=404, detail="Data pelamar tidak ditemukan.")

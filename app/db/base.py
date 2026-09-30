@@ -9,6 +9,7 @@ from app.models.recruitment import (  # noqa
     TestSubmission,
     KaryawanSementara,
     RecruitmentSetting,
+    DataKaryawan,
 )
 from app.models.cms import (  # noqa
     SiteSetting,

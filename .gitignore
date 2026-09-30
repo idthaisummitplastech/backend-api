@@ -49,6 +49,11 @@ ENV/
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Scratch & one-time scripts
+check_*.py
+fix_*.py
+scratch/
 .tox/
 
 # Uploaded candidate files

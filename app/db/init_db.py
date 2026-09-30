@@ -19,6 +19,62 @@ def init_db(db: Session) -> None:
     logger.info("Synchronizing database tables...")
     Base.metadata.create_all(bind=engine)
     try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            migration_queries = [
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS nik VARCHAR(50);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS first_name VARCHAR(150);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS last_name VARCHAR(150);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS gender VARCHAR(50);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS religion VARCHAR(50);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS ethnic VARCHAR(50);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS height_cm INTEGER;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS weight_kg INTEGER;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS marriage_status VARCHAR(50);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS birth_place VARCHAR(150);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS address_ktp TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS province_ktp VARCHAR(100);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS city_ktp VARCHAR(100);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS district_ktp VARCHAR(100);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS village_ktp VARCHAR(100);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS rt_ktp VARCHAR(20);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS rw_ktp VARCHAR(20);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS street_ktp VARCHAR(255);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS domicile_same_as_ktp BOOLEAN DEFAULT TRUE;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS address_domicile TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS province_domicile VARCHAR(100);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS city_domicile VARCHAR(100);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS district_domicile VARCHAR(100);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS village_domicile VARCHAR(100);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS rt_domicile VARCHAR(20);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS rw_domicile VARCHAR(20);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS street_domicile VARCHAR(255);",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS photo_file TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS ktp_file TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS kk_file TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS ijazah_file TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS transkrip_file TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS cert_nonformal_file TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS bpjs_kesehatan_file TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS bpjs_ketenagakerjaan_file TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS npwp_file TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS akta_file TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS skck_file TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS education_history TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS work_history TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS family_parents TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS family_siblings TEXT;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS psikotes_duration_minutes INTEGER DEFAULT 60;",
+                "ALTER TABLE applicants ADD COLUMN IF NOT EXISTS user_test_duration_minutes INTEGER DEFAULT 60;",
+            ]
+            for q in migration_queries:
+                conn.execute(text(q))
+            conn.commit()
+            logger.info("Career applicants table migration verified.")
+    except Exception as e:
+        logger.warning(f"Career DB migration notice: {e}")
+
+    try:
         Base.metadata.create_all(bind=engine_company)
         # Auto-migration: ensure newly added columns exist in existing production DB tables
         from sqlalchemy import text

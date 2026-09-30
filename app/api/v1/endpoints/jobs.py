@@ -15,7 +15,14 @@ router = APIRouter()
 def get_public_open_jobs(db: Session = Depends(get_db)):
     """Fetch list of all active recruitment job postings (Public)."""
     jobs = crud_job.get_open_jobs(db)
-    return ApiResponse(data=[JobPostingResponse.model_validate(j) for j in jobs])
+    result = []
+    for j in jobs:
+        count = len(j.applicants) if j.applicants else 0
+        item = JobPostingResponse.model_validate(j)
+        item.applicants_count = count
+        item._count = {"applicants": count}
+        result.append(item)
+    return ApiResponse(data=result)
 
 
 @router.get("/all", response_model=ApiResponse[List[JobPostingResponse]])
@@ -25,7 +32,14 @@ def get_all_jobs_admin(
 ):
     """Fetch all job postings including draft & closed positions (Admin)."""
     jobs = crud_job.get_multi(db, limit=200)
-    return ApiResponse(data=[JobPostingResponse.model_validate(j) for j in jobs])
+    result = []
+    for j in jobs:
+        count = len(j.applicants) if j.applicants else 0
+        item = JobPostingResponse.model_validate(j)
+        item.applicants_count = count
+        item._count = {"applicants": count}
+        result.append(item)
+    return ApiResponse(data=result)
 
 
 @router.get("/{id}", response_model=ApiResponse[JobPostingResponse])

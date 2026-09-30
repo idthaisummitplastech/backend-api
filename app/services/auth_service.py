@@ -98,8 +98,12 @@ class AuthService:
             expires_in=180 * 60,
             role="applicant",
             name=applicant.full_name,
+            full_name=applicant.full_name,
+            fullName=applicant.full_name,
             email=applicant.email,
             requires_mfa=False,
+            id=applicant.id,
+            applicant_id=applicant.id,
         )
 
     def setup_admin_mfa(self, db: Session, admin_id: int) -> Dict[str, str]:

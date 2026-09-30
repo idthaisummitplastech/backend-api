@@ -8,6 +8,7 @@ from app.models.recruitment import (
     TestSubmission,
     KaryawanSementara,
     RecruitmentSetting,
+    DataKaryawan,
 )
 from app.models.cms import (
     SiteSetting,
@@ -37,6 +38,7 @@ __all__ = [
     "TestSubmission",
     "KaryawanSementara",
     "RecruitmentSetting",
+    "DataKaryawan",
     "SiteSetting",
     "NavMenu",
     "HeroSection",
