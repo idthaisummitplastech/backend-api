@@ -75,60 +75,69 @@ class EmailNotificationService:
         </html>
         """
 
-    def send_email(self, to_email: str, subject: str, html_content: str) -> Dict[str, Any]:
-        """Dispatch email via authenticated SMTP server with TLS."""
+    def send_email(self, to_email: str, subject: str, html_content: str, run_async: bool = True) -> Dict[str, Any]:
+        """Dispatch email via authenticated SMTP server with TLS. Dispatches in background thread by default to keep UI response instant."""
         if not self.user or not self.password:
             logger.warning("SMTP credentials missing. Email not dispatched to: %s", to_email)
             return {"success": False, "error": "Kredensial SMTP belum diset pada environment."}
 
-        try:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = subject
-            msg["From"] = f"{self.from_name} <{self.from_email}>"
-            msg["To"] = to_email
-            msg["Reply-To"] = self.from_email
-            msg["X-Mailer"] = "PT ITSP Career ATS Engine Python/FastAPI"
-
-            text_content = self._html_to_text(html_content)
-            msg.attach(MIMEText(text_content, "plain", "utf-8"))
-            msg.attach(MIMEText(html_content, "html", "utf-8"))
-
-            import ssl
-
-            # Setup permissive SSL context compatible with corporate/on-premise Zimbra mail certs
-            ssl_ctx = ssl.create_default_context()
-            ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = ssl.CERT_NONE
-
-            # Port 465 is implicit SSL; port 587 is explicit TLS (STARTTLS)
-            is_ssl = (self.port == 465) or getattr(settings, "SMTP_SSL", False)
-
-            if is_ssl:
-                with smtplib.SMTP_SSL(self.host, self.port, timeout=15, context=ssl_ctx) as server:
-                    server.login(self.user, self.password)
-                    server.sendmail(self.from_email, [to_email], msg.as_string())
-            else:
-                with smtplib.SMTP(self.host, self.port, timeout=15) as server:
-                    if settings.SMTP_TLS:
-                        server.starttls(context=ssl_ctx)
-                    server.login(self.user, self.password)
-                    server.sendmail(self.from_email, [to_email], msg.as_string())
-
-            logger.info("Email successfully sent to: %s with subject: %s", to_email, subject)
+        def _do_send():
             try:
-                from app.core.observability import push_email_log_to_grafana
-                push_email_log_to_grafana("web_karir", self.from_name, to_email, subject, "SUCCESS")
-            except Exception:
-                pass
-            return {"success": True}
-        except Exception as e:
-            logger.error("Failed to send email to %s: %s", to_email, str(e))
-            try:
-                from app.core.observability import push_email_log_to_grafana
-                push_email_log_to_grafana("web_karir", self.from_name, to_email, subject, "FAILED", str(e))
-            except Exception:
-                pass
-            return {"success": False, "error": str(e)}
+                msg = MIMEMultipart("alternative")
+                msg["Subject"] = subject
+                msg["From"] = f"{self.from_name} <{self.from_email}>"
+                msg["To"] = to_email
+                msg["Reply-To"] = self.from_email
+                msg["X-Mailer"] = "PT ITSP Career ATS Engine Python/FastAPI"
+
+                text_content = self._html_to_text(html_content)
+                msg.attach(MIMEText(text_content, "plain", "utf-8"))
+                msg.attach(MIMEText(html_content, "html", "utf-8"))
+
+                import ssl
+
+                # Setup permissive SSL context compatible with corporate/on-premise Zimbra mail certs
+                ssl_ctx = ssl.create_default_context()
+                ssl_ctx.check_hostname = False
+                ssl_ctx.verify_mode = ssl.CERT_NONE
+
+                # Port 465 is implicit SSL; port 587 is explicit TLS (STARTTLS)
+                is_ssl = (self.port == 465) or getattr(settings, "SMTP_SSL", False)
+
+                if is_ssl:
+                    with smtplib.SMTP_SSL(self.host, self.port, timeout=15, context=ssl_ctx) as server:
+                        server.login(self.user, self.password)
+                        server.sendmail(self.from_email, [to_email], msg.as_string())
+                else:
+                    with smtplib.SMTP(self.host, self.port, timeout=15) as server:
+                        if settings.SMTP_TLS:
+                            server.starttls(context=ssl_ctx)
+                        server.login(self.user, self.password)
+                        server.sendmail(self.from_email, [to_email], msg.as_string())
+
+                logger.info("Email successfully sent to: %s with subject: %s", to_email, subject)
+                try:
+                    from app.core.observability import push_email_log_to_grafana
+                    push_email_log_to_grafana("web_karir", self.from_name, to_email, subject, "SUCCESS")
+                except Exception:
+                    pass
+                return {"success": True}
+            except Exception as e:
+                logger.error("Failed to send email to %s: %s", to_email, str(e))
+                try:
+                    from app.core.observability import push_email_log_to_grafana
+                    push_email_log_to_grafana("web_karir", self.from_name, to_email, subject, "FAILED", str(e))
+                except Exception:
+                    pass
+                return {"success": False, "error": str(e)}
+
+        if run_async:
+            import threading
+            worker = threading.Thread(target=_do_send, daemon=True, name=f"email-worker-{to_email}")
+            worker.start()
+            return {"success": True, "dispatched_async": True}
+
+        return _do_send()
 
     def _resolve_maps_url(self, maps_url: Optional[str], location: Optional[str]) -> Optional[str]:
         """Normalize or auto-derive Google Maps link from custom URL, embed iframe, or location keywords."""
