@@ -1043,16 +1043,39 @@ async def import_employees_excel(
         raise HTTPException(status_code=400, detail=f"Gagal membaca file Excel: {str(exc)}")
 
     all_employees = []
-    if "ITSP" in wb.sheetnames:
-        all_employees.extend(parse_employee_sheet(wb["ITSP"], "ITSP", default_emp_status="active"))
-    if "Trainee" in wb.sheetnames:
-        all_employees.extend(parse_employee_sheet(wb["Trainee"], "Trainee", default_emp_status="active"))
-    if include_out and "Out" in wb.sheetnames:
-        all_employees.extend(parse_employee_sheet(wb["Out"], "Out", default_emp_status="resign"))
 
-    # Fallback if specific sheets not present
+    # Dynamically match employee sheet (ITSP, Employee, Karyawan, Staff, Pegawai)
+    emp_sheet = None
+    for s in wb.sheetnames:
+        if s.lower() in ("itsp", "employee", "karyawan", "staff", "pegawai", "tetap"):
+            emp_sheet = s
+            break
+
+    # Dynamically match trainee sheet (Trainee, Traine, Magang, Pemagangan, Training)
+    trainee_sheet = None
+    for s in wb.sheetnames:
+        if any(kw in s.lower() for kw in ("trainee", "traine", "magang", "pemagangan", "training")):
+            trainee_sheet = s
+            break
+
+    # Dynamically match out/resign sheet (Out, Resign, Keluar, Nonaktif)
+    out_sheet = None
+    for s in wb.sheetnames:
+        if any(kw in s.lower() for kw in ("out", "resign", "keluar", "nonaktif")):
+            out_sheet = s
+            break
+
+    if emp_sheet:
+        all_employees.extend(parse_employee_sheet(wb[emp_sheet], emp_sheet, default_emp_status="active"))
+    if trainee_sheet:
+        all_employees.extend(parse_employee_sheet(wb[trainee_sheet], trainee_sheet, default_emp_status="active"))
+    if include_out and out_sheet:
+        all_employees.extend(parse_employee_sheet(wb[out_sheet], out_sheet, default_emp_status="resign"))
+
+    # Fallback if specific sheets not matched: scan all sheets
     if not all_employees and wb.sheetnames:
-        all_employees.extend(parse_employee_sheet(wb.active, wb.active.title, default_emp_status="active"))
+        for s in wb.sheetnames:
+            all_employees.extend(parse_employee_sheet(wb[s], s, default_emp_status="active"))
 
     if not all_employees:
         raise HTTPException(status_code=400, detail="Tidak ada data karyawan yang valid ditemukan di dalam file Excel.")

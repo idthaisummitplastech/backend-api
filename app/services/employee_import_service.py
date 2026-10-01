@@ -151,11 +151,13 @@ def parse_employee_sheet(
         if "children" in h1:
             children_cols = [c, c + 1, c + 2]
 
+    is_trainee = any(kw in sheet_name.lower() for kw in ("trainee", "traine", "magang", "pemagangan", "training"))
+
     # Fallback to standard sheet positions if not detected from headers
     if not sibling_cols:
-        sibling_cols = [56, 57, 58, 59] if sheet_name.lower() != "trainee" else [54, 55, 56, 57]
+        sibling_cols = [54, 55, 56, 57] if is_trainee else [56, 57, 58, 59]
     if not children_cols:
-        children_cols = [62, 63, 64] if sheet_name.lower() != "trainee" else [60, 61, 62]
+        children_cols = [60, 61, 62] if is_trainee else [62, 63, 64]
 
     employees = []
     for r in range(header_row_idx + 1, sheet.max_row + 1):
@@ -166,7 +168,11 @@ def parse_employee_sheet(
         raw_id_col2 = clean_str(sheet.cell(r, 2).value)
         raw_id_col3 = clean_str(sheet.cell(r, 3).value)
 
-        if sheet_name.lower() == "trainee":
+        # Protection: if an employee row was accidentally copy-pasted into trainee sheet
+        if is_trainee and raw_id_col3 and str(raw_id_col3).startswith("ITSP."):
+            continue
+
+        if is_trainee:
             # For trainees, Col 3 is N-012507139 (company trainee ID)
             emp_id = raw_id_col3 or (f"TR-{raw_id_col2}" if raw_id_col2 else f"TR-{r}")
             payroll_id_val = raw_id_col3
@@ -189,7 +195,7 @@ def parse_employee_sheet(
         latest_contract_start = None
         latest_contract_end = None
 
-        max_contract_col = 25 if sheet_name.lower() == "trainee" else 31
+        max_contract_col = 25 if is_trainee else 31
         for c in range(15, min(max_contract_col, sheet.max_column + 1), 2):
             st = clean_date(sheet.cell(r, c).value)
             en = clean_date(sheet.cell(r, c + 1).value)
@@ -219,7 +225,7 @@ def parse_employee_sheet(
         status_raw = clean_str(sheet.cell(r, col_status).value) if col_status else None
         base_status = map_contract_status(status_raw)
 
-        if sheet_name.lower() == "trainee":
+        if is_trainee:
             contract_status = f"Trainee {c_seq}" if c_seq > 1 else "Trainee"
         elif base_status == "PKWTT":
             contract_status = "PKWTT"
