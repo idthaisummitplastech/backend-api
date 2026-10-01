@@ -356,9 +356,19 @@ def verify_mfa(
     payload: MFAVerifyRequest,
     current_admin: RecruitmentAdmin = Depends(get_current_admin),
     db: Session = Depends(get_db),
+    db_company: Session = Depends(get_db_company),
 ):
-    """Verify code and formally activate MFA on admin account."""
+    """Verify code and formally activate MFA on admin account across both databases."""
     success = auth_service.verify_and_enable_mfa(db, current_admin.id, payload.code)
+    if success:
+        try:
+            cu = db_company.query(User).filter(User.email.ilike(current_admin.email)).first()
+            if cu:
+                cu.mfa_enabled = True
+                cu.mfa_secret = current_admin.mfa_secret
+                db_company.commit()
+        except Exception:
+            db_company.rollback()
     return ApiResponse(data=success, message="MFA 2-Faktor berhasil diaktifkan.")
 
 
@@ -420,6 +430,19 @@ def activate_cms_mfa(
     if backup_codes:
         user.backup_codes = backup_codes if isinstance(backup_codes, str) else json.dumps(backup_codes)
     db.commit()
+
+    # Sync MFA secret and enabled status to RecruitmentAdmin in web_karir
+    try:
+        from app.db.session import SessionLocal
+        with SessionLocal() as karir_db:
+            rec_admin = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email.ilike(user.email)).first()
+            if rec_admin:
+                rec_admin.is_mfa_enabled = True
+                if secret:
+                    rec_admin.mfa_secret = secret
+                karir_db.commit()
+    except Exception:
+        pass
 
     return {
         "success": True,

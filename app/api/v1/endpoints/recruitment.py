@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
+from app.db.session import get_db, get_db_company
 from app.crud.crud_recruitment import (
     crud_karyawan,
     crud_setting,
@@ -12,7 +12,7 @@ from app.crud.crud_recruitment import (
     crud_data_karyawan,
 )
 from app.crud.crud_auth import crud_admin
-from app.models.auth import RecruitmentAdmin
+from app.models.auth import RecruitmentAdmin, User
 from app.models.recruitment import (
     Applicant,
     KaryawanSementara,
@@ -220,18 +220,59 @@ def schedule_interview(
 def reset_applicant_password(
     payload: Dict[str, Any],
     db: Session = Depends(get_db),
+    db_company: Session = Depends(get_db_company),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "admin"])),
 ):
-    """Reset candidate password by HR/Admin."""
-    applicant_id = int(payload.get("applicant_id") or payload.get("applicantId") or 0)
+    """Reset candidate or staff/admin password by HR/Admin."""
+    target_type = str(payload.get("targetType") or payload.get("target_type") or "").strip().lower()
+    target_id = int(payload.get("targetId") or payload.get("target_id") or payload.get("applicant_id") or payload.get("applicantId") or 0)
     new_password = str(payload.get("new_password") or payload.get("newPassword") or "").strip()
 
-    if not applicant_id:
-        raise HTTPException(status_code=400, detail="ID Pelamar wajib diisi.")
     if not new_password or len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Password baru minimal 6 karakter.")
 
-    applicant = crud_applicant.get(db, applicant_id)
+    if target_type == "admin":
+        if not target_id:
+            raise HTTPException(status_code=400, detail="ID Pengguna Staf/Admin wajib diisi.")
+
+        hashed = get_password_hash(new_password)
+        target_email = None
+        user_name = "Pengguna"
+
+        # 1. Update in company User (web_perusahaan)
+        comp_user = db_company.query(User).filter(User.id == target_id).first()
+        if comp_user:
+            comp_user.password = hashed
+            db_company.commit()
+            target_email = comp_user.email
+            user_name = comp_user.name
+        else:
+            rec_user = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.id == target_id).first()
+            if not rec_user:
+                raise HTTPException(status_code=404, detail="Akun staf/admin tidak ditemukan.")
+            rec_user.password = hashed
+            db.commit()
+            target_email = rec_user.email
+            user_name = rec_user.name
+
+        # 2. Sync to other database
+        if target_email:
+            ra = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email.ilike(target_email)).first()
+            if ra:
+                ra.password = hashed
+                db.commit()
+            cu = db_company.query(User).filter(User.email.ilike(target_email)).first()
+            if cu:
+                cu.password = hashed
+                db_company.commit()
+
+        return {"success": True, "message": f"Password akun staf/admin {user_name} berhasil direset."}
+
+    # Default: Reset Applicant Password
+    if not target_id:
+        raise HTTPException(status_code=400, detail="ID Pelamar wajib diisi.")
+
+    applicant = crud_applicant.get(db, target_id)
     if not applicant:
         raise HTTPException(status_code=404, detail="Data pelamar tidak ditemukan.")
 
