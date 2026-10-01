@@ -69,8 +69,35 @@ def init_db(db: Session) -> None:
             ]
             for q in migration_queries:
                 conn.execute(text(q))
+            data_karyawan_queries = [
+                "ALTER TABLE data_karyawan ALTER COLUMN email DROP NOT NULL;",
+                "ALTER TABLE data_karyawan ALTER COLUMN phone DROP NOT NULL;",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS years_of_service NUMERIC(5,2);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS contract_history TEXT;",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS contract_sequence INTEGER DEFAULT 1;",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS level VARCHAR(50);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS section VARCHAR(100);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS employee_type VARCHAR(50);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS factory_office VARCHAR(50);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS payroll_id VARCHAR(50);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS plant VARCHAR(50);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS ptkp_status VARCHAR(20);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS npwp VARCHAR(50);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS bpjs_tk_no VARCHAR(50);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS bank_account_no VARCHAR(50);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS bank_name VARCHAR(50) DEFAULT 'BCA';",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS father_name VARCHAR(150);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS mother_name VARCHAR(150);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS spouse_name VARCHAR(150);",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS family_children TEXT;",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS family_members_count INTEGER DEFAULT 0;",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS family_parents TEXT;",
+                "ALTER TABLE data_karyawan ADD COLUMN IF NOT EXISTS family_siblings TEXT;",
+            ]
+            for q in data_karyawan_queries:
+                conn.execute(text(q))
             conn.commit()
-            logger.info("Career applicants table migration verified.")
+            logger.info("Career applicants and data_karyawan tables migration verified.")
     except Exception as e:
         logger.warning(f"Career DB migration notice: {e}")
 

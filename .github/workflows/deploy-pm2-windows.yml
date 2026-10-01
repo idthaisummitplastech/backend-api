@@ -55,6 +55,7 @@ jobs:
           git fetch origin main
           git reset --hard origin/main
           D:\itsp-backend\venv\Scripts\pip.exe install -r requirements.txt
+          D:\itsp-backend\venv\Scripts\python.exe migrate_rich_employee_columns.py
           & $pm2Cmd restart itsp-backend
           & $pm2Cmd save
           & $pm2Cmd list
