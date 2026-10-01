@@ -996,6 +996,21 @@ def update_employee(
     if not emp:
         raise HTTPException(status_code=404, detail="Data karyawan tidak ditemukan.")
 
+    # Map common aliases from frontend
+    alias_map = {
+        "join_date": "contract_start_date",
+        "agreed_salary": "salary",
+        "national_id": "nik",
+        "education_level": "last_education",
+        "institution_name": "school_name",
+        "ktp_street_address": "address_ktp",
+        "domicile_street_address": "address_domicile",
+        "marital_status": "marriage_status",
+    }
+    for alias, target in alias_map.items():
+        if alias in payload and target not in payload:
+            payload[target] = payload[alias]
+
     for field in [
         "full_name", "phone", "email", "job_title", "department", "work_location",
         "salary", "contract_status", "contract_sequence", "contract_history", "years_of_service",
@@ -1004,9 +1019,23 @@ def update_employee(
         "father_name", "mother_name", "spouse_name", "family_children", "family_members_count",
         "employee_status", "notes", "blood_type",
         "marriage_status", "address_ktp", "address_domicile",
+        "nik", "birth_place", "age", "gender", "religion",
+        "last_education", "major", "school_name", "photo_file",
     ]:
         if field in payload:
             setattr(emp, field, payload[field])
+
+    if "photo_profile" in payload and payload["photo_profile"]:
+        emp.photo_file = payload["photo_profile"]
+
+    if "birth_date" in payload:
+        if payload["birth_date"]:
+            try:
+                emp.birth_date = datetime.fromisoformat(str(payload["birth_date"])[:10]).replace(tzinfo=timezone.utc)
+            except Exception:
+                pass
+        else:
+            emp.birth_date = None
 
     if "contract_start_date" in payload and payload["contract_start_date"]:
         try:
@@ -1014,11 +1043,14 @@ def update_employee(
         except Exception:
             pass
 
-    if "contract_end_date" in payload and payload["contract_end_date"]:
-        try:
-            emp.contract_end_date = datetime.fromisoformat(str(payload["contract_end_date"])[:10]).replace(tzinfo=timezone.utc)
-        except Exception:
-            pass
+    if "contract_end_date" in payload:
+        if payload["contract_end_date"]:
+            try:
+                emp.contract_end_date = datetime.fromisoformat(str(payload["contract_end_date"])[:10]).replace(tzinfo=timezone.utc)
+            except Exception:
+                pass
+        else:
+            emp.contract_end_date = None
 
     db.commit()
     return {"success": True, "message": "Data karyawan berhasil diperbarui."}
