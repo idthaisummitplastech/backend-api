@@ -258,8 +258,8 @@ class DataKaryawan(Base):
     first_name = Column(String(150), nullable=True)
     last_name = Column(String(150), nullable=True)
     nik = Column(String(50), index=True, nullable=True)  # NIK KTP
-    email = Column(String(255), index=True, nullable=False)
-    phone = Column(String(50), nullable=False)
+    email = Column(String(255), index=True, nullable=True)
+    phone = Column(String(50), nullable=True)
     birth_place = Column(String(150), nullable=True)
     birth_date = Column(DateTime(timezone=True), nullable=True)
     age = Column(Integer, nullable=True)

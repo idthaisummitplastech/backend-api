@@ -1,7 +1,8 @@
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
+from import_master_employees import parse_employee_sheet
 
 from app.db.session import get_db, get_db_company
 from app.crud.crud_recruitment import (
@@ -940,13 +941,102 @@ def update_employee(
     return {"success": True, "message": "Data karyawan berhasil diperbarui."}
 
 
+@router.post("/employees/import-excel")
+async def import_employees_excel(
+    file: UploadFile = File(...),
+    include_out: bool = Form(False),
+    replace_all: bool = Form(False),
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["admin", "hr"])),
+):
+    """Import Master Employee Excel file into data_karyawan."""
+    import openpyxl
+    import io
+
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="Format file harus berupa Excel (.xlsx atau .xls).")
+
+    contents = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(contents), data_only=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Gagal membaca file Excel: {str(exc)}")
+
+    all_employees = []
+    if "ITSP" in wb.sheetnames:
+        all_employees.extend(parse_employee_sheet(wb["ITSP"], "ITSP", default_emp_status="active"))
+    if "Trainee" in wb.sheetnames:
+        all_employees.extend(parse_employee_sheet(wb["Trainee"], "Trainee", default_emp_status="active"))
+    if include_out and "Out" in wb.sheetnames:
+        all_employees.extend(parse_employee_sheet(wb["Out"], "Out", default_emp_status="resign"))
+
+    # Fallback if specific sheets not present
+    if not all_employees and wb.sheetnames:
+        all_employees.extend(parse_employee_sheet(wb.active, wb.active.title, default_emp_status="active"))
+
+    if not all_employees:
+        raise HTTPException(status_code=400, detail="Tidak ada data karyawan yang valid ditemukan di dalam file Excel.")
+
+    if replace_all:
+        db.query(Applicant).filter(Applicant.is_employee == True).update({"is_employee": False, "employee_id": None})
+        db.query(DataKaryawan).delete()
+        db.commit()
+
+    existing_map = {e.employee_id: e for e in db.query(DataKaryawan).all()}
+    inserted_count = 0
+    updated_count = 0
+    seq_counter = len(existing_map) + 1
+
+    for emp in all_employees:
+        emp_id = emp["employee_id"]
+        if emp_id in existing_map:
+            existing_obj = existing_map[emp_id]
+            for k, v in emp.items():
+                if k not in ("id", "employee_id", "applicant_id") and v is not None:
+                    setattr(existing_obj, k, v)
+            updated_count += 1
+        else:
+            if not emp.get("sequence_number"):
+                emp["sequence_number"] = seq_counter
+                seq_counter += 1
+            new_obj = DataKaryawan(**emp)
+            db.add(new_obj)
+            existing_map[emp_id] = new_obj
+            inserted_count += 1
+
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Berhasil mengimpor {inserted_count} data karyawan baru dan memperbarui {updated_count} data karyawan (Total: {len(all_employees)} data).",
+        "inserted": inserted_count,
+        "updated": updated_count,
+        "total": len(all_employees),
+    }
+
+
+@router.delete("/employees/all")
+def delete_all_employees(
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["admin", "hr"])),
+):
+    """Delete all employee records from data_karyawan (Reset master data)."""
+    db.query(Applicant).filter(Applicant.is_employee == True).update({"is_employee": False, "employee_id": None})
+    deleted_count = db.query(DataKaryawan).delete()
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Seluruh data karyawan ({deleted_count} data) berhasil dihapus dari sistem.",
+        "deleted_count": deleted_count,
+    }
+
+
 @router.delete("/employees/{id}")
 def delete_employee(
     id: int,
     db: Session = Depends(get_db),
-    _admin: RecruitmentAdmin = Depends(RoleChecker(["admin"])),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["admin", "hr"])),
 ):
-    """Delete employee record (Super Admin only)."""
+    """Delete single employee record (Admin or HR)."""
     emp = crud_data_karyawan.get(db, id)
     if not emp:
         raise HTTPException(status_code=404, detail="Data karyawan tidak ditemukan.")
@@ -959,5 +1049,5 @@ def delete_employee(
             app.employee_id = None
 
     crud_data_karyawan.remove(db, id=id)
-    return {"success": True, "message": "Data karyawan berhasil dihapus."}
+    return {"success": True, "message": f"Data karyawan {emp.full_name} ({emp.employee_id}) berhasil dihapus."}
 
