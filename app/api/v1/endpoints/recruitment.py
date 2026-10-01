@@ -801,6 +801,13 @@ def get_employees_list(
                 "contract_end_date": e.contract_end_date.isoformat() if e.contract_end_date else None,
                 "contract_duration_months": e.contract_duration_months,
                 "contract_status": e.contract_status,
+                "contract_sequence": e.contract_sequence,
+                "contract_history": e.contract_history,
+                "years_of_service": e.years_of_service,
+                "level": e.level,
+                "section": e.section,
+                "employee_type": e.employee_type,
+                "factory_office": e.factory_office,
                 "employee_status": e.employee_status,
                 "photo_file": e.photo_file,
                 "ktp_file": e.ktp_file,
@@ -814,6 +821,16 @@ def get_employees_list(
                 "hired_at": e.hired_at.isoformat() if e.hired_at else None,
                 "notes": e.notes,
                 "created_at": e.created_at.isoformat() if e.created_at else None,
+                "national_id": e.nik,
+                "join_date": e.contract_start_date.isoformat() if e.contract_start_date else None,
+                "photo_profile": e.photo_file,
+                "agreed_salary": e.salary,
+                "marital_status": e.marriage_status,
+                "education_level": e.last_education,
+                "institution_name": e.school_name,
+                "ktp_street_address": e.address_ktp or e.street_ktp,
+                "domicile_street_address": e.address_domicile or e.street_domicile,
+                "work_experiences": e.work_history,
             }
             for e in employees
         ]
@@ -886,6 +903,13 @@ def get_employee_detail(
             "contract_end_date": emp.contract_end_date.isoformat() if emp.contract_end_date else None,
             "contract_duration_months": emp.contract_duration_months,
             "contract_status": emp.contract_status,
+            "contract_sequence": emp.contract_sequence,
+            "contract_history": emp.contract_history,
+            "years_of_service": emp.years_of_service,
+            "level": emp.level,
+            "section": emp.section,
+            "employee_type": emp.employee_type,
+            "factory_office": emp.factory_office,
             "employee_status": emp.employee_status,
             "photo_file": emp.photo_file,
             "ktp_file": emp.ktp_file,
@@ -901,6 +925,16 @@ def get_employee_detail(
             "hired_at": emp.hired_at.isoformat() if emp.hired_at else None,
             "notes": emp.notes,
             "created_at": emp.created_at.isoformat() if emp.created_at else None,
+            "national_id": emp.nik,
+            "join_date": emp.contract_start_date.isoformat() if emp.contract_start_date else None,
+            "photo_profile": emp.photo_file,
+            "agreed_salary": emp.salary,
+            "marital_status": emp.marriage_status,
+            "education_level": emp.last_education,
+            "institution_name": emp.school_name,
+            "ktp_street_address": emp.address_ktp or emp.street_ktp,
+            "domicile_street_address": emp.address_domicile or emp.street_domicile,
+            "work_experiences": emp.work_history,
         }
     }
 
@@ -919,7 +953,9 @@ def update_employee(
 
     for field in [
         "full_name", "phone", "email", "job_title", "department", "work_location",
-        "salary", "contract_status", "employee_status", "notes", "blood_type",
+        "salary", "contract_status", "contract_sequence", "contract_history", "years_of_service",
+        "level", "section", "employee_type", "factory_office",
+        "employee_status", "notes", "blood_type",
         "marriage_status", "address_ktp", "address_domicile",
     ]:
         if field in payload:

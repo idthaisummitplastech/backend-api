@@ -1,8 +1,10 @@
 """
 Employee Import Service for PT Indonesia Thai Summit Plastech
 Parses Excel sheets (ITSP, Trainee, Out) into structured employee data.
+Captures full contract history, years of service, age, level, section, and employee types.
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, List
@@ -14,7 +16,7 @@ def clean_str(val: Any) -> Optional[str]:
     if val is None:
         return None
     s = str(val).strip()
-    return s if s else None
+    return s if s and s not in ("0", "-", "none", "nan", "null") else None
 
 
 def clean_date(val: Any) -> Optional[datetime]:
@@ -26,7 +28,7 @@ def clean_date(val: Any) -> Optional[datetime]:
         return val
     try:
         s = str(val).strip()
-        if not s or s.lower() in ("none", "null", "-", "#n/a"):
+        if not s or s.lower() in ("none", "null", "-", "#n/a", "0"):
             return None
         dt = datetime.fromisoformat(s[:10])
         return dt.replace(tzinfo=timezone.utc)
@@ -39,6 +41,15 @@ def clean_int(val: Any) -> Optional[int]:
         return None
     try:
         return int(float(str(val).strip()))
+    except Exception:
+        return None
+
+
+def clean_float(val: Any) -> Optional[float]:
+    if val is None:
+        return None
+    try:
+        return round(float(str(val).strip()), 2)
     except Exception:
         return None
 
@@ -96,11 +107,16 @@ def parse_employee_sheet(
     col_id = find_header_col(headers, ["payroll id", "payroll", "id"])
     col_seq = find_header_col(headers, ["no", "no."])
     col_name = find_header_col(headers, ["name", "nama"])
+    col_level = find_header_col(headers, ["level"])
     col_dept = find_header_col(headers, ["department", "departemen"])
+    col_section = find_header_col(headers, ["section", "seksi"])
     col_position = find_header_col(headers, ["position", "jabatan"])
     col_status = find_header_col(headers, ["status employee", "status"])
     col_plant = find_header_col(headers, ["plant"])
+    col_type = find_header_col(headers, ["type"])
+    col_factory = find_header_col(headers, ["factory", "office"])
     col_joint_date = find_header_col(headers, ["joint date", "hire date", "join date"])
+    col_yos = find_header_col(headers, ["years of service", "years of\nservice", "yos", "masa kerja"])
     col_ktp = find_header_col(headers, ["no. ktp", "ktp", "nik", "passport"])
     col_pob = find_header_col(headers, ["place of birth", "tempat lahir"])
     col_dob = find_header_col(headers, ["birth date", "tgl lahir", "tanggal lahir"])
@@ -115,6 +131,10 @@ def parse_employee_sheet(
     col_school = find_header_col(headers, ["school name", "sekolah", "universitas"])
     col_phone = find_header_col(headers, ["phone no.", "phone", "no hp", "no. hp"])
     col_email = find_header_col(headers, ["email"])
+    col_npwp = find_header_col(headers, ["npwp"])
+    col_bpjs_tk = find_header_col(headers, ["jamsostek", "bpjs ketenagakerjaan"])
+    col_mother = find_header_col(headers, ["name of mother", "ibu"])
+    col_father = find_header_col(headers, ["name of father", "ayah"])
     col_remarks = find_header_col(headers, ["remarks", "keterangan"])
 
     employees = []
@@ -136,22 +156,62 @@ def parse_employee_sheet(
             seq_num = r
 
         joint_dt = clean_date(sheet.cell(r, col_joint_date).value) if col_joint_date else None
-        latest_end_dt = None
-        for c in range(14, min(31, sheet.max_column + 1)):
-            header_text = headers.get(c, "").lower()
-            if "end" in header_text:
-                end_cand = clean_date(sheet.cell(r, c).value)
-                if end_cand:
-                    if not latest_end_dt or end_cand > latest_end_dt:
-                        latest_end_dt = end_cand
+
+        # Parse contract history across contract columns (Cols 15 to 30)
+        contracts = []
+        c_seq = 1
+        latest_contract_start = None
+        latest_contract_end = None
+
+        for c in range(15, min(33, sheet.max_column + 1), 2):
+            st = clean_date(sheet.cell(r, c).value)
+            en = clean_date(sheet.cell(r, c + 1).value)
+            if st or en:
+                num = (c - 15) // 2 + 1
+                c_seq = num
+                contracts.append({
+                    "contract": num,
+                    "start": st.isoformat()[:10] if st else None,
+                    "end": en.isoformat()[:10] if en else None,
+                })
+                if st:
+                    latest_contract_start = st
+                if en:
+                    latest_contract_end = en
 
         dept = clean_str(sheet.cell(r, col_dept).value) if col_dept else None
+        section = clean_str(sheet.cell(r, col_section).value) if col_section else None
+        level = clean_str(sheet.cell(r, col_level).value) if col_level else None
         position = clean_str(sheet.cell(r, col_position).value) if col_position else None
         plant = clean_str(sheet.cell(r, col_plant).value) if col_plant else None
+        emp_type = clean_str(sheet.cell(r, col_type).value) if col_type else None
+        factory_office = clean_str(sheet.cell(r, col_factory).value) if col_factory else None
+
+        # Status & sequence formatting
         status_raw = clean_str(sheet.cell(r, col_status).value) if col_status else None
-        contract_status = map_contract_status(status_raw)
+        base_status = map_contract_status(status_raw)
+
         if sheet_name.lower() == "trainee":
-            contract_status = "Trainee"
+            contract_status = f"Trainee {c_seq}" if c_seq > 1 else "Trainee"
+        elif base_status == "PKWTT":
+            contract_status = "PKWTT"
+        elif base_status == "Expatriate":
+            contract_status = "Expatriate"
+        elif base_status == "PKWT":
+            contract_status = f"PKWT {c_seq}"
+        else:
+            contract_status = base_status
+
+        # Years of service
+        yos_val = clean_float(sheet.cell(r, col_yos).value) if col_yos else None
+        if yos_val is None and joint_dt:
+            yos_val = round((datetime.now(timezone.utc) - joint_dt).days / 365.25, 2)
+
+        # Age & Date of Birth
+        dob = clean_date(sheet.cell(r, col_dob).value) if col_dob else None
+        age_val = clean_int(sheet.cell(r, col_age).value) if col_age else None
+        if age_val is None and dob:
+            age_val = int((datetime.now(timezone.utc) - dob).days / 365.25)
 
         phone = clean_str(sheet.cell(r, col_phone).value) if col_phone else None
         email = clean_str(sheet.cell(r, col_email).value) if col_email else None
@@ -168,6 +228,14 @@ def parse_employee_sheet(
             else:
                 gender = gender_raw
 
+        parents = []
+        mother = clean_str(sheet.cell(r, col_mother).value) if col_mother else None
+        father = clean_str(sheet.cell(r, col_father).value) if col_father else None
+        if father and father != "0":
+            parents.append({"relation": "Ayah", "name": father})
+        if mother and mother != "0":
+            parents.append({"relation": "Ibu", "name": mother})
+
         emp_data = {
             "employee_id": emp_id,
             "sequence_number": seq_num,
@@ -175,14 +243,21 @@ def parse_employee_sheet(
             "job_title": position or "Staff",
             "department": dept or "General",
             "work_location": plant or "Plant PT ITSP Karawang",
-            "contract_start_date": joint_dt or datetime(2020, 1, 1, tzinfo=timezone.utc),
-            "contract_end_date": latest_end_dt,
+            "contract_start_date": latest_contract_start or joint_dt or datetime(2020, 1, 1, tzinfo=timezone.utc),
+            "contract_end_date": latest_contract_end,
             "contract_status": contract_status,
+            "contract_sequence": c_seq,
+            "contract_history": json.dumps(contracts) if contracts else None,
+            "years_of_service": yos_val,
+            "level": level,
+            "section": section,
+            "employee_type": emp_type,
+            "factory_office": factory_office,
             "employee_status": default_emp_status,
             "nik": ktp,
             "birth_place": clean_str(sheet.cell(r, col_pob).value) if col_pob else None,
-            "birth_date": clean_date(sheet.cell(r, col_dob).value) if col_dob else None,
-            "age": clean_int(sheet.cell(r, col_age).value) if col_age else None,
+            "birth_date": dob,
+            "age": age_val,
             "gender": gender,
             "marriage_status": clean_str(sheet.cell(r, col_kawin).value) if col_kawin else None,
             "address_ktp": clean_str(sheet.cell(r, col_addr).value) if col_addr else None,
@@ -193,6 +268,9 @@ def parse_employee_sheet(
             "school_name": clean_str(sheet.cell(r, col_school).value) if col_school else None,
             "phone": phone or "-",
             "email": email or f"{emp_id.replace('.', '').replace('-', '').lower()}@itsp.co.id",
+            "npwp_file": clean_str(sheet.cell(r, col_npwp).value) if col_npwp else None,
+            "bpjs_ketenagakerjaan_file": clean_str(sheet.cell(r, col_bpjs_tk).value) if col_bpjs_tk else None,
+            "family_parents": json.dumps(parents) if parents else None,
             "notes": clean_str(sheet.cell(r, col_remarks).value) if col_remarks else None,
         }
         employees.append(emp_data)

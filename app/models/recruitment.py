@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Column,
     Integer,
+    Float,
+    Numeric,
     String,
     Boolean,
     DateTime,
@@ -310,6 +312,13 @@ class DataKaryawan(Base):
     contract_end_date = Column(DateTime(timezone=True), nullable=True)  # Tanggal Selesai Kontrak
     contract_duration_months = Column(Integer, default=12, nullable=True)
     contract_status = Column(String(50), default="PKWT 1", nullable=False)  # PKWT 1, PKWT 2, PKWTT, Percobaan
+    contract_sequence = Column(Integer, default=1, nullable=True)  # Kontrak ke-berapa (e.g. 1, 2, 5, 7)
+    contract_history = Column(Text, nullable=True)  # JSON riwayat seluruh tahapan kontrak (K1, K2, dst)
+    years_of_service = Column(Float, nullable=True)  # Masa kerja dalam tahun (e.g. 4.81)
+    level = Column(String(50), nullable=True)  # e.g. M1, M2, T1, T3, T10, O, TSP
+    section = Column(String(100), nullable=True)  # e.g. Injection, Painting, Assembly, Molding
+    employee_type = Column(String(50), nullable=True)  # Direct, Indirect, Admin, Thai Manager
+    factory_office = Column(String(50), nullable=True)  # Factory, Office
     employee_status = Column(String(50), default="active", nullable=False)  # active, resign, end_of_contract
 
     # Berkas & Lampiran Dokumen
