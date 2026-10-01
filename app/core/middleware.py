@@ -6,6 +6,7 @@ from starlette.responses import Response, JSONResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 import sentry_sdk
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +51,14 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
     # Send to Sentry
     sentry_sdk.capture_exception(exc)
 
+    error_msg = f"Terjadi kesalahan internal pada server: {str(exc)}" if settings.DEBUG else "Terjadi kesalahan internal pada server. Silakan hubungi tim administrator."
     return JSONResponse(
         status_code=500,
         content={
             "success": False,
-            "error": "Terjadi kesalahan internal pada server. Silakan hubungi tim administrator.",
+            "error": error_msg,
+            "message": error_msg,
+            "detail": error_msg,
             "error_code": "INTERNAL_SERVER_ERROR",
         },
     )
