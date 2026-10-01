@@ -219,9 +219,10 @@ def update_cms_profile(
 def get_cms_items(
     model: str,
     db: Session = Depends(get_db),
+    karir_db: Session = Depends(get_karir_db),
 ):
     """
-    Retrieve dynamic CMS records for Web Perusahaan.
+    Retrieve dynamic CMS records for Web Perusahaan & Web Karir.
     Supports: settings, nav-menus, hero-sections, announcements, partners,
     features, services, products, blog-posts, testimonials, faqs, statistics,
     certifications, facilities, sustainability-reports, users.
@@ -229,6 +230,60 @@ def get_cms_items(
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
+
+    # Bidirectional synchronization for users between web_perusahaan and web_karir
+    if model == "users":
+        # 1. Import any users from recruitment_admins (web_karir) to company users (web_perusahaan)
+        try:
+            rec_admins = karir_db.query(RecruitmentAdmin).all()
+            existing_company_users = {u.email.lower(): u for u in db.query(User).all() if u.email}
+            synced_to_company = False
+            for ra in rec_admins:
+                if ra.email and ra.email.lower() not in existing_company_users:
+                    new_u = User(
+                        email=ra.email.lower(),
+                        name=ra.name or ra.username,
+                        password=ra.password,
+                        role=ra.role,
+                        mfa_enabled=ra.is_mfa_enabled,
+                        mfa_secret=ra.mfa_secret,
+                    )
+                    db.add(new_u)
+                    synced_to_company = True
+            if synced_to_company:
+                db.commit()
+        except Exception:
+            db.rollback()
+
+        # 2. Sync company users (admin/hr/user_dept) to recruitment_admins if missing
+        try:
+            existing_rec_emails = {ra.email.lower(): ra for ra in karir_db.query(RecruitmentAdmin).all() if ra.email}
+            company_users = db.query(User).all()
+            synced_to_rec = False
+            for cu in company_users:
+                if cu.email and cu.email.lower() not in existing_rec_emails and cu.role in ["admin", "hr", "user_dept"]:
+                    base_username = cu.email.split("@")[0]
+                    dept_default = {
+                        "hr": "Human Capital",
+                        "user_dept": "Engineering",
+                        "admin": "IT & Systems",
+                    }.get(cu.role, "General Management")
+                    new_ra = RecruitmentAdmin(
+                        username=base_username,
+                        email=cu.email.lower(),
+                        name=cu.name,
+                        password=cu.password,
+                        role=cu.role,
+                        department=dept_default,
+                        is_mfa_enabled=cu.mfa_enabled,
+                        mfa_secret=cu.mfa_secret,
+                    )
+                    karir_db.add(new_ra)
+                    synced_to_rec = True
+            if synced_to_rec:
+                karir_db.commit()
+        except Exception:
+            karir_db.rollback()
 
     order_col = None
     if hasattr(crud.model, "sort_order"):
@@ -267,12 +322,33 @@ def get_cms_items(
         else:
             raise exc
 
+    # Map of rec_admins by email for department & username enrichment
+    rec_admin_map = {}
+    if model == "users":
+        try:
+            rec_admin_map = {ra.email.lower(): ra for ra in karir_db.query(RecruitmentAdmin).all() if ra.email}
+        except Exception:
+            pass
+
     results = []
     for item in items:
         d = {c.name: getattr(item, c.name) for c in item.__table__.columns}
-        # Hide raw passwords when querying users
-        if model == "users" and "password" in d:
-            d["password"] = "******"
+        # Hide raw passwords when querying users and enrich with department & username
+        if model == "users":
+            if "password" in d:
+                d["password"] = "******"
+            em = (d.get("email") or "").lower()
+            ra = rec_admin_map.get(em)
+            dept_default = {
+                "hr": "Human Capital",
+                "user_dept": "Engineering",
+                "admin": "IT & Systems",
+                "marketing": "Marketing",
+            }.get(d.get("role"), "General Management")
+            d["username"] = ra.username if (ra and ra.username) else em.split("@")[0]
+            d["department"] = ra.department if (ra and ra.department) else dept_default
+            d["is_mfa_enabled"] = bool(d.get("mfa_enabled") or (ra and ra.is_mfa_enabled))
+            d["isMfaEnabled"] = d["is_mfa_enabled"]
         results.append(d)
 
     return ApiResponse(data=results)
@@ -463,6 +539,7 @@ def delete_cms_item(
     model: str,
     id: int,
     db: Session = Depends(get_db),
+    karir_db: Session = Depends(get_karir_db),
     _admin=Depends(RoleChecker(["admin"])),
 ):
     """Delete dynamic CMS record (Admin only)."""
@@ -473,6 +550,13 @@ def delete_cms_item(
     item = crud.get(db, id)
     if not item:
         raise HTTPException(status_code=404, detail=f"Data {model} tidak ditemukan.")
+
+    if model == "users" and hasattr(item, "email") and item.email:
+        try:
+            karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email.ilike(item.email)).delete()
+            karir_db.commit()
+        except Exception:
+            karir_db.rollback()
 
     crud.remove(db, id=id)
     return StatusResponse(message=f"Data {model} berhasil dihapus.")
