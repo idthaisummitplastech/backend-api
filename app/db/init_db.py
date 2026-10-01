@@ -80,6 +80,8 @@ def init_db(db: Session) -> None:
         from sqlalchemy import text
         with engine_company.connect() as conn:
             conn.execute(text("ALTER TABLE nav_menus ADD COLUMN IF NOT EXISTS is_maintenance BOOLEAN DEFAULT FALSE;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(100);"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS department VARCHAR(100);"))
             conn.commit()
         logger.info("Company CMS tables synchronized (web_perusahaan).")
         seed_company_cms()

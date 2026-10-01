@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.core.security import decode_access_token
 from app.crud.crud_auth import crud_admin
 from app.crud.crud_recruitment import crud_applicant
-from app.models.auth import RecruitmentAdmin
+from app.models.auth import RecruitmentAdmin, User
 from app.models.recruitment import Applicant
 
 # Standard Bearer scheme for Swagger UI & clients
@@ -66,8 +66,54 @@ def get_current_admin(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    admin_id = int(payload["sub"])
-    admin = crud_admin.get(db, admin_id)
+    sub_val = payload["sub"]
+    admin_id = None
+    if isinstance(sub_val, int):
+        admin_id = sub_val
+    elif isinstance(sub_val, str):
+        if sub_val.isdigit():
+            admin_id = int(sub_val)
+        elif sub_val.startswith("{"):
+            try:
+                import ast
+                parsed = ast.literal_eval(sub_val)
+                if isinstance(parsed, dict):
+                    raw_id = parsed.get("sub") or parsed.get("id")
+                    if raw_id and str(raw_id).isdigit():
+                        admin_id = int(raw_id)
+            except Exception:
+                pass
+
+    admin = None
+    if admin_id is not None:
+        admin = crud_admin.get(db, admin_id)
+        if not admin:
+            # Check User table in web_perusahaan
+            user = db.query(User).filter(User.id == admin_id).first()
+            if user:
+                admin = RecruitmentAdmin(
+                    id=user.id,
+                    username=user.username or user.email.split("@")[0],
+                    name=user.name,
+                    role=user.role,
+                    email=user.email,
+                    department=user.department,
+                )
+
+    if not admin and payload.get("email"):
+        admin = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email.ilike(payload.get("email"))).first()
+        if not admin:
+            user = db.query(User).filter(User.email.ilike(payload.get("email"))).first()
+            if user:
+                admin = RecruitmentAdmin(
+                    id=user.id,
+                    username=user.username or user.email.split("@")[0],
+                    name=user.name,
+                    role=user.role,
+                    email=user.email,
+                    department=user.department,
+                )
+
     if not admin:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -110,8 +156,14 @@ def get_current_applicant(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    applicant_id = int(payload["sub"])
-    applicant = crud_applicant.get(db, applicant_id)
+    sub_val = payload["sub"]
+    applicant_id = None
+    if isinstance(sub_val, int):
+        applicant_id = sub_val
+    elif isinstance(sub_val, str) and sub_val.isdigit():
+        applicant_id = int(sub_val)
+
+    applicant = crud_applicant.get(db, applicant_id) if applicant_id else None
     if not applicant:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

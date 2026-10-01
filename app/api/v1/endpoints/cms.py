@@ -241,15 +241,32 @@ def get_cms_items(
             for ra in rec_admins:
                 if ra.email and ra.email.lower() not in existing_company_users:
                     new_u = User(
+                        username=ra.username,
                         email=ra.email.lower(),
                         name=ra.name or ra.username,
                         password=ra.password,
                         role=ra.role,
+                        department=ra.department,
                         mfa_enabled=ra.is_mfa_enabled,
                         mfa_secret=ra.mfa_secret,
                     )
                     db.add(new_u)
                     synced_to_company = True
+                elif ra.email and ra.email.lower() in existing_company_users:
+                    cu = existing_company_users[ra.email.lower()]
+                    if getattr(cu, "username", None) and not ra.username:
+                        ra.username = cu.username
+                        karir_db.commit()
+                    elif not getattr(cu, "username", None) and ra.username:
+                        cu.username = ra.username
+                        synced_to_company = True
+
+                    if getattr(cu, "department", None) and not ra.department:
+                        ra.department = cu.department
+                        karir_db.commit()
+                    elif not getattr(cu, "department", None) and ra.department:
+                        cu.department = ra.department
+                        synced_to_company = True
             if synced_to_company:
                 db.commit()
         except Exception:
@@ -262,19 +279,25 @@ def get_cms_items(
             synced_to_rec = False
             for cu in company_users:
                 if cu.email and cu.email.lower() not in existing_rec_emails and cu.role in ["admin", "hr", "user_dept"]:
-                    base_username = cu.email.split("@")[0]
+                    base_username = getattr(cu, "username", None) or cu.email.split("@")[0]
+                    cand_username = base_username
+                    counter = 1
+                    while karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.username.ilike(cand_username)).first():
+                        cand_username = f"{base_username}{counter}"
+                        counter += 1
+
                     dept_default = {
                         "hr": "Human Capital",
                         "user_dept": "Engineering",
                         "admin": "IT & Systems",
                     }.get(cu.role, "General Management")
                     new_ra = RecruitmentAdmin(
-                        username=base_username,
+                        username=cand_username,
                         email=cu.email.lower(),
                         name=cu.name,
                         password=cu.password,
                         role=cu.role,
-                        department=dept_default,
+                        department=getattr(cu, "department", None) or dept_default,
                         is_mfa_enabled=cu.mfa_enabled,
                         mfa_secret=cu.mfa_secret,
                     )
@@ -345,8 +368,8 @@ def get_cms_items(
                 "admin": "IT & Systems",
                 "marketing": "Marketing",
             }.get(d.get("role"), "General Management")
-            d["username"] = ra.username if (ra and ra.username) else em.split("@")[0]
-            d["department"] = ra.department if (ra and ra.department) else dept_default
+            d["username"] = getattr(item, "username", None) or (ra.username if (ra and ra.username) else None) or em.split("@")[0]
+            d["department"] = getattr(item, "department", None) or (ra.department if (ra and ra.department) else None) or dept_default
             d["is_mfa_enabled"] = bool(d.get("mfa_enabled") or (ra and ra.is_mfa_enabled))
             d["isMfaEnabled"] = d["is_mfa_enabled"]
         results.append(d)
@@ -462,6 +485,19 @@ def create_cms_item(
                 detail=f"Email '{user_email}' sudah terdaftar pada pengguna lain. Gunakan alamat email lain.",
             )
 
+        # Set username
+        desired_username = (normalized_data.get("username") or user_email.split("@")[0]).strip()
+        normalized_data["username"] = desired_username
+
+        # Set department
+        dept_default = {
+            "hr": "Human Capital",
+            "user_dept": "Engineering",
+            "admin": "IT & Systems",
+            "marketing": "Marketing",
+        }.get(normalized_data.get("role"), "General Management")
+        normalized_data["department"] = (normalized_data.get("department") or dept_default).strip()
+
         pwd = normalized_data.get("password")
         if pwd and not str(pwd).startswith("$2b$"):
             normalized_data["password"] = get_password_hash(str(pwd))
@@ -490,11 +526,17 @@ def create_cms_item(
         try:
             email_val = normalized_data.get("email")
             existing_rec = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email.ilike(email_val)).first()
+            dept_val = normalized_data.get("department") or {
+                "hr": "Human Capital",
+                "user_dept": "Engineering",
+                "admin": "IT & Systems",
+            }.get(normalized_data.get("role"), "General Management")
+
             if not existing_rec:
-                base_username = email_val.split("@")[0]
+                base_username = (normalized_data.get("username") or email_val.split("@")[0]).strip()
                 username = base_username
                 counter = 1
-                while karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.username == username).first():
+                while karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.username.ilike(username)).first():
                     username = f"{base_username}{counter}"
                     counter += 1
                 new_rec = RecruitmentAdmin(
@@ -503,9 +545,18 @@ def create_cms_item(
                     email=email_val,
                     password=normalized_data.get("password"),
                     role=normalized_data.get("role"),
+                    department=dept_val,
                     is_mfa_enabled=bool(normalized_data.get("mfa_enabled", False)),
                 )
                 karir_db.add(new_rec)
+                karir_db.commit()
+            else:
+                if normalized_data.get("username"):
+                    existing_rec.username = normalized_data["username"].strip()
+                if normalized_data.get("department"):
+                    existing_rec.department = normalized_data["department"].strip()
+                existing_rec.name = normalized_data.get("name", existing_rec.name)
+                existing_rec.role = normalized_data.get("role", existing_rec.role)
                 karir_db.commit()
         except Exception:
             karir_db.rollback()
@@ -554,19 +605,67 @@ def update_cms_item(
         if "backup_codes" in normalized_data and not isinstance(normalized_data["backup_codes"], str):
             normalized_data["backup_codes"] = json.dumps(normalized_data["backup_codes"])
 
-        # Sync to recruitment_admins if email matched
-        if old_email:
-            rec_admin = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email == old_email).first()
+        new_username = (normalized_data.get("username") or "").strip()
+        new_dept = (normalized_data.get("department") or "").strip()
+        if new_username:
+            normalized_data["username"] = new_username
+        if new_dept:
+            normalized_data["department"] = new_dept
+
+        # Sync to recruitment_admins if matched
+        try:
+            rec_admin = None
+            if old_email:
+                rec_admin = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email.ilike(old_email)).first()
+            if not rec_admin and "email" in normalized_data:
+                rec_admin = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email.ilike(normalized_data["email"])).first()
+            if not rec_admin and getattr(item, "username", None):
+                rec_admin = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.username.ilike(getattr(item, "username"))).first()
+
             if rec_admin:
-                if "name" in normalized_data:
+                if new_username:
+                    # Check if username is taken by another admin
+                    other_u = karir_db.query(RecruitmentAdmin).filter(
+                        (RecruitmentAdmin.username.ilike(new_username)) & (RecruitmentAdmin.id != rec_admin.id)
+                    ).first()
+                    if not other_u:
+                        rec_admin.username = new_username
+                if "name" in normalized_data and normalized_data["name"]:
                     rec_admin.name = normalized_data["name"]
-                if "email" in normalized_data:
-                    rec_admin.email = normalized_data["email"]
-                if "role" in normalized_data:
+                if "email" in normalized_data and normalized_data["email"]:
+                    rec_admin.email = normalized_data["email"].strip().lower()
+                if "role" in normalized_data and normalized_data["role"]:
                     rec_admin.role = normalized_data["role"]
-                if "password" in normalized_data:
+                if new_dept:
+                    rec_admin.department = new_dept
+                if "password" in normalized_data and normalized_data["password"]:
                     rec_admin.password = normalized_data["password"]
                 karir_db.commit()
+            else:
+                # If rec_admin doesn't exist yet, create it
+                target_role = normalized_data.get("role", getattr(item, "role", "hr"))
+                if target_role in ["admin", "hr", "user_dept"]:
+                    target_email = (normalized_data.get("email") or old_email or "").strip().lower()
+                    base_u = new_username or target_email.split("@")[0]
+                    u_cand = base_u
+                    cnt = 1
+                    while karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.username.ilike(u_cand)).first():
+                        u_cand = f"{base_u}{cnt}"
+                        cnt += 1
+                    new_ra = RecruitmentAdmin(
+                        username=u_cand,
+                        name=normalized_data.get("name", getattr(item, "name", "")),
+                        email=target_email,
+                        password=normalized_data.get("password", getattr(item, "password", "")),
+                        role=target_role,
+                        department=new_dept or "Human Capital",
+                        is_mfa_enabled=getattr(item, "mfa_enabled", False),
+                        mfa_secret=getattr(item, "mfa_secret", None),
+                    )
+                    karir_db.add(new_ra)
+                    karir_db.commit()
+        except Exception:
+            karir_db.rollback()
 
     clean_data = {k: v for k, v in normalized_data.items() if hasattr(crud.model, k) and k not in ["id", "created_at", "updated_at"]}
     updated = crud.update(db, db_obj=item, obj_in=clean_data)

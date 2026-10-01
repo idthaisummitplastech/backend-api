@@ -42,7 +42,12 @@ def login_cms_user(
     if not user or not verify_password(password, user.password):
         raise HTTPException(status_code=401, detail="Email atau password salah.")
 
-    token = create_access_token({"sub": str(user.id), "email": user.email, "role": user.role, "name": user.name})
+    token = create_access_token(
+        subject=str(user.id),
+        role=user.role,
+        department=getattr(user, "department", None),
+        extra_claims={"email": user.email, "name": user.name}
+    )
     has_secret = bool(user.mfa_secret)
     return {
         "success": True,
@@ -92,6 +97,10 @@ def login_ats_admin(
 
         if not cms_user and "@" not in clean_input:
             cms_user = db_company.query(User).filter(User.email.ilike(clean_input)).first()
+
+        # Check by User.username if present
+        if not cms_user and "@" not in clean_input:
+            cms_user = db_company.query(User).filter(User.username.ilike(clean_input)).first()
 
         # Check if username matches split email or recruitment_admin username
         if not cms_user and "@" not in clean_input:
@@ -257,9 +266,10 @@ def login_ats_admin(
             admin_dept = (ats_admin.department if ats_admin else None) or dept_name
 
             token = create_access_token(
-                {"sub": str(admin_id), "email": cms_user.email, "role": admin_role, "name": admin_name},
+                subject=str(admin_id),
                 role=admin_role,
                 department=admin_dept,
+                extra_claims={"email": cms_user.email, "name": admin_name}
             )
 
             return {
@@ -350,9 +360,10 @@ def login_ats_admin(
                 )
 
         token = create_access_token(
-            {"sub": str(local_admin.id), "email": local_admin.email, "role": local_admin.role, "name": local_admin.name},
+            subject=str(local_admin.id),
             role=local_admin.role,
             department=local_admin.department,
+            extra_claims={"email": local_admin.email, "name": local_admin.name}
         )
 
         return {

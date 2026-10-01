@@ -42,16 +42,28 @@ def create_access_token(
     else:
         expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
+    claims = extra_claims.copy() if extra_claims else {}
+    sub_val = subject
+    if isinstance(subject, dict):
+        sub_val = subject.get("sub") or subject.get("id") or subject.get("email")
+        if "role" in subject and role == "applicant":
+            role = str(subject["role"])
+        if "department" in subject and not department:
+            department = str(subject["department"])
+        for k, v in subject.items():
+            if k not in ("sub", "role", "department") and k not in claims:
+                claims[k] = v
+
     to_encode = {
-        "sub": str(subject),
+        "sub": str(sub_val),
         "role": role,
         "department": department,
         "iat": now,
         "exp": expire,
         "iss": "itsp-auth-service",
     }
-    if extra_claims:
-        to_encode.update(extra_claims)
+    if claims:
+        to_encode.update(claims)
 
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt

@@ -24,10 +24,12 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    username = Column(String(100), unique=True, index=True, nullable=True)
     email = Column(String(255), unique=True, index=True, nullable=False)
     password = Column(String(255), nullable=False)  # Bcrypt hash
     name = Column(String(200), nullable=False)
     role = Column(String(50), default="admin", nullable=False)
+    department = Column(String(100), nullable=True)
     mfa_enabled = Column(Boolean, default=False, nullable=False)
     mfa_secret = Column(String(100), nullable=True)
     backup_codes = Column(Text, nullable=True)
