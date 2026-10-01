@@ -406,6 +406,50 @@ def create_cms_item(
 
     # User special handling: hash password & duplicate check
     if model == "users":
+        # Handle action == 'reset_mfa'
+        if normalized_data.get("action") == "reset_mfa":
+            user_id = int(normalized_data.get("user_id") or payload.get("userId") or 0)
+            if not user_id:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User ID wajib diisi.")
+
+            target_email = None
+            user_name = "Pengguna"
+
+            # 1. Reset in User (web_perusahaan)
+            comp_user = db.query(User).filter(User.id == user_id).first()
+            if comp_user:
+                comp_user.mfa_enabled = False
+                comp_user.mfa_secret = None
+                comp_user.backup_codes = None
+                db.commit()
+                target_email = comp_user.email
+                user_name = comp_user.name
+            else:
+                rec_user = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.id == user_id).first()
+                if not rec_user:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Akun pengguna tidak ditemukan.")
+                rec_user.is_mfa_enabled = False
+                rec_user.mfa_secret = None
+                karir_db.commit()
+                target_email = rec_user.email
+                user_name = rec_user.name
+
+            # 2. Sync to other database
+            if target_email:
+                ra = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email.ilike(target_email)).first()
+                if ra:
+                    ra.is_mfa_enabled = False
+                    ra.mfa_secret = None
+                    karir_db.commit()
+                cu = db.query(User).filter(User.email.ilike(target_email)).first()
+                if cu:
+                    cu.mfa_enabled = False
+                    cu.mfa_secret = None
+                    cu.backup_codes = None
+                    db.commit()
+
+            return ApiResponse(message=f"MFA Google Authenticator untuk akun {user_name} berhasil direset.")
+
         user_email = (normalized_data.get("email") or "").strip().lower()
         if not user_email:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email wajib diisi.")
