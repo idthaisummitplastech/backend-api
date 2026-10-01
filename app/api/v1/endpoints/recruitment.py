@@ -941,6 +941,24 @@ def update_employee(
     return {"success": True, "message": "Data karyawan berhasil diperbarui."}
 
 
+@router.get("/employees/template")
+def download_employee_template():
+    """Download standard Excel template for master employee import."""
+    import os
+    from fastapi.responses import FileResponse
+
+    file_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "static", "Template_Master_Karyawan_ITSP.xlsx")
+    )
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File template tidak ditemukan.")
+    return FileResponse(
+        file_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="Template_Master_Karyawan_ITSP.xlsx",
+    )
+
+
 @router.post("/employees/import-excel")
 async def import_employees_excel(
     file: UploadFile = File(...),
