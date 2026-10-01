@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from import_master_employees import parse_employee_sheet
+from app.services.employee_import_service import parse_employee_sheet
 
 from app.db.session import get_db, get_db_company
 from app.crud.crud_recruitment import (
