@@ -104,7 +104,8 @@ def parse_employee_sheet(
         return []
 
     # Map column names
-    col_id = find_header_col(headers, ["payroll id", "payroll", "id"])
+    col_id = find_header_col(headers, ["id"])
+    col_payroll_id = find_header_col(headers, ["payroll id", "payroll"])
     col_seq = find_header_col(headers, ["no", "no."])
     col_name = find_header_col(headers, ["name", "nama"])
     col_level = find_header_col(headers, ["level"])
@@ -122,7 +123,7 @@ def parse_employee_sheet(
     col_dob = find_header_col(headers, ["birth date", "tgl lahir", "tanggal lahir"])
     col_age = find_header_col(headers, ["age", "usia", "umur"])
     col_gender = find_header_col(headers, ["gender", "jenis kelamin"])
-    col_kawin = find_header_col(headers, ["status kawin", "marital"])
+    col_kawin = find_header_col(headers, ["status kawin", "marital", "ptkp"])
     col_addr = find_header_col(headers, ["address", "alamat"])
     col_city = find_header_col(headers, ["city", "kota"])
     col_prov = find_header_col(headers, ["province", "provinsi"])
@@ -132,10 +133,29 @@ def parse_employee_sheet(
     col_phone = find_header_col(headers, ["phone no.", "phone", "no hp", "no. hp"])
     col_email = find_header_col(headers, ["email"])
     col_npwp = find_header_col(headers, ["npwp"])
-    col_bpjs_tk = find_header_col(headers, ["jamsostek", "bpjs ketenagakerjaan"])
-    col_mother = find_header_col(headers, ["name of mother", "ibu"])
-    col_father = find_header_col(headers, ["name of father", "ayah"])
+    col_bpjs_tk = find_header_col(headers, ["jamsostek", "bpjs ketenagakerjaan", "kpj"])
+    col_bank_acc = find_header_col(headers, ["account no.", "account no", "rekening"])
+    col_mother = find_header_col(headers, ["name of mother", "mother", "ibu"])
+    col_father = find_header_col(headers, ["name of father", "father", "ayah"])
+    col_spouse = find_header_col(headers, ["husband/wife name", "husband", "wife", "suami", "istri", "pasangan"])
+    col_family_count = find_header_col(headers, ["number of family member", "family member", "tanggungan"])
     col_remarks = find_header_col(headers, ["remarks", "keterangan"])
+
+    # Detect Sibling and Children columns (often merged on row 1)
+    sibling_cols: List[int] = []
+    children_cols: List[int] = []
+    for c in range(1, sheet.max_column + 1):
+        h1 = str(sheet.cell(1, c).value or "").lower()
+        if "sibling" in h1:
+            sibling_cols = [c, c + 1, c + 2, c + 3]
+        if "children" in h1:
+            children_cols = [c, c + 1, c + 2]
+
+    # Fallback to standard sheet positions if not detected from headers
+    if not sibling_cols:
+        sibling_cols = [56, 57, 58, 59] if sheet_name.lower() != "trainee" else [54, 55, 56, 57]
+    if not children_cols:
+        children_cols = [62, 63, 64] if sheet_name.lower() != "trainee" else [60, 61, 62]
 
     employees = []
     for r in range(header_row_idx + 1, sheet.max_row + 1):
@@ -143,11 +163,17 @@ def parse_employee_sheet(
         if not name or name.isdigit() or name.lower() in ("total", "sub total", "none", "nan"):
             continue
 
-        raw_id = clean_str(sheet.cell(r, col_id).value) if col_id else None
-        if not raw_id:
-            raw_id = clean_str(sheet.cell(r, 2).value) or clean_str(sheet.cell(r, 3).value) or f"EMP-{sheet_name}-{r}"
+        raw_id_col2 = clean_str(sheet.cell(r, 2).value)
+        raw_id_col3 = clean_str(sheet.cell(r, 3).value)
 
-        emp_id = str(raw_id).strip()
+        if sheet_name.lower() == "trainee":
+            # For trainees, Col 3 is N-012507139 (company trainee ID)
+            emp_id = raw_id_col3 or (f"TR-{raw_id_col2}" if raw_id_col2 else f"TR-{r}")
+            payroll_id_val = raw_id_col3
+        else:
+            # For ITSP employees, Col 2 is ID (004.02.16) and Col 3 is Payroll ID (ITSP.004.02.16)
+            emp_id = raw_id_col2 or raw_id_col3 or f"EMP-{r}"
+            payroll_id_val = raw_id_col3
 
         seq_num = None
         if col_seq:
@@ -163,16 +189,18 @@ def parse_employee_sheet(
         latest_contract_start = None
         latest_contract_end = None
 
-        for c in range(15, min(33, sheet.max_column + 1), 2):
+        max_contract_col = 25 if sheet_name.lower() == "trainee" else 31
+        for c in range(15, min(max_contract_col, sheet.max_column + 1), 2):
             st = clean_date(sheet.cell(r, c).value)
             en = clean_date(sheet.cell(r, c + 1).value)
             if st or en:
                 num = (c - 15) // 2 + 1
                 c_seq = num
                 contracts.append({
-                    "contract": num,
-                    "start": st.isoformat()[:10] if st else None,
-                    "end": en.isoformat()[:10] if en else None,
+                    "sequence": num,
+                    "contract_name": f"Kontrak {num}",
+                    "start_date": st.isoformat()[:10] if st else None,
+                    "end_date": en.isoformat()[:10] if en else None,
                 })
                 if st:
                     latest_contract_start = st
@@ -228,38 +256,64 @@ def parse_employee_sheet(
             else:
                 gender = gender_raw
 
-        parents = []
-        mother = clean_str(sheet.cell(r, col_mother).value) if col_mother else None
+        # Family data
         father = clean_str(sheet.cell(r, col_father).value) if col_father else None
+        mother = clean_str(sheet.cell(r, col_mother).value) if col_mother else None
+        spouse = clean_str(sheet.cell(r, col_spouse).value) if col_spouse else None
+
+        parents = []
         if father and father != "0":
             parents.append({"relation": "Ayah", "name": father})
         if mother and mother != "0":
             parents.append({"relation": "Ibu", "name": mother})
 
+        siblings_list = []
+        for sc in sibling_cols:
+            if sc <= sheet.max_column:
+                sv = clean_str(sheet.cell(r, sc).value)
+                if sv and sv != "0":
+                    siblings_list.append(sv)
+
+        children_list = []
+        for cc in children_cols:
+            if cc <= sheet.max_column:
+                cv = clean_str(sheet.cell(r, cc).value)
+                if cv and cv != "0":
+                    children_list.append(cv)
+
+        fam_count = clean_int(sheet.cell(r, col_family_count).value) if col_family_count else 0
+        ptkp_val = clean_str(sheet.cell(r, col_kawin).value) if col_kawin else None
+        npwp_val = clean_str(sheet.cell(r, col_npwp).value) if col_npwp else None
+        bpjs_tk_val = clean_str(sheet.cell(r, col_bpjs_tk).value) if col_bpjs_tk else None
+        bank_acc_val = clean_str(sheet.cell(r, col_bank_acc).value) if col_bank_acc else None
+
         emp_data = {
             "employee_id": emp_id,
+            "payroll_id": payroll_id_val,
             "sequence_number": seq_num,
             "full_name": name,
             "job_title": position or "Staff",
             "department": dept or "General",
+            "section": section,
+            "level": level,
+            "plant": plant or "KIIC",
             "work_location": plant or "Plant PT ITSP Karawang",
+            "employee_type": emp_type,
+            "factory_office": factory_office,
             "contract_start_date": latest_contract_start or joint_dt or datetime(2020, 1, 1, tzinfo=timezone.utc),
             "contract_end_date": latest_contract_end,
             "contract_status": contract_status,
             "contract_sequence": c_seq,
             "contract_history": json.dumps(contracts) if contracts else None,
             "years_of_service": yos_val,
-            "level": level,
-            "section": section,
-            "employee_type": emp_type,
-            "factory_office": factory_office,
             "employee_status": default_emp_status,
             "nik": ktp,
             "birth_place": clean_str(sheet.cell(r, col_pob).value) if col_pob else None,
             "birth_date": dob,
             "age": age_val,
             "gender": gender,
-            "marriage_status": clean_str(sheet.cell(r, col_kawin).value) if col_kawin else None,
+            "marriage_status": ptkp_val,
+            "ptkp_status": ptkp_val,
             "address_ktp": clean_str(sheet.cell(r, col_addr).value) if col_addr else None,
             "city_ktp": clean_str(sheet.cell(r, col_city).value) if col_city else None,
             "province_ktp": clean_str(sheet.cell(r, col_prov).value) if col_prov else None,
@@ -268,9 +322,19 @@ def parse_employee_sheet(
             "school_name": clean_str(sheet.cell(r, col_school).value) if col_school else None,
             "phone": phone or "-",
             "email": email or f"{emp_id.replace('.', '').replace('-', '').lower()}@itsp.co.id",
-            "npwp_file": clean_str(sheet.cell(r, col_npwp).value) if col_npwp else None,
-            "bpjs_ketenagakerjaan_file": clean_str(sheet.cell(r, col_bpjs_tk).value) if col_bpjs_tk else None,
+            "npwp": npwp_val,
+            "npwp_file": npwp_val,
+            "bpjs_tk_no": bpjs_tk_val,
+            "bpjs_ketenagakerjaan_file": bpjs_tk_val,
+            "bank_account_no": bank_acc_val,
+            "bank_name": "BCA",
+            "father_name": father if father != "0" else None,
+            "mother_name": mother if mother != "0" else None,
+            "spouse_name": spouse if spouse != "0" else None,
             "family_parents": json.dumps(parents) if parents else None,
+            "family_siblings": json.dumps(siblings_list) if siblings_list else None,
+            "family_children": json.dumps(children_list) if children_list else None,
+            "family_members_count": fam_count,
             "notes": clean_str(sheet.cell(r, col_remarks).value) if col_remarks else None,
         }
         employees.append(emp_data)

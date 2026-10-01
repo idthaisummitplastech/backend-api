@@ -300,10 +300,23 @@ class DataKaryawan(Base):
     major = Column(String(255), nullable=True)
     education_history = Column(Text, nullable=True)  # JSON
     work_history = Column(Text, nullable=True)  # JSON
+    # Data Keluarga Lengkap
+    father_name = Column(String(150), nullable=True)
+    mother_name = Column(String(150), nullable=True)
+    spouse_name = Column(String(150), nullable=True)
+    family_children = Column(Text, nullable=True)  # JSON list of children
+    family_members_count = Column(Integer, default=0, nullable=True)
     family_parents = Column(Text, nullable=True)  # JSON
-    family_siblings = Column(Text, nullable=True)  # JSON
+    family_siblings = Column(Text, nullable=True)  # JSON list of siblings
 
     # Kepegawaian & Kontrak Kerja Resmi
+    payroll_id = Column(String(50), nullable=True)  # e.g. ITSP.004.02.16 / N-012507139
+    plant = Column(String(50), nullable=True)  # KIIC / GIIC
+    ptkp_status = Column(String(20), nullable=True)  # TK, K/0, K/1, K/2, K/3
+    npwp = Column(String(50), nullable=True)
+    bpjs_tk_no = Column(String(50), nullable=True)  # No. Jamsostek / BPJSTK
+    bank_account_no = Column(String(50), nullable=True)  # No. Rekening Payroll
+    bank_name = Column(String(50), default="BCA", nullable=True)
     job_title = Column(String(150), nullable=False)
     department = Column(String(100), index=True, nullable=False)
     work_location = Column(String(150), default="Plant PT ITSP Karawang", nullable=True)
