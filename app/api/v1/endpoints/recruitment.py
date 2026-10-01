@@ -741,9 +741,29 @@ def get_employees_list(
     """Retrieve full employee lists with filter and search."""
     query = db.query(DataKaryawan)
     if department:
-        query = query.filter(DataKaryawan.department.ilike(f"%{department.strip()}%"))
+        d = department.strip()
+        if d.lower() in ("information technology", "it", "syd & it", "syd"):
+            query = query.filter((DataKaryawan.department.ilike("%it%")) | (DataKaryawan.department.ilike("%syd%")))
+        elif d.lower() in ("human resources & ga", "hr & ga", "hr", "hrga", "human resources"):
+            query = query.filter((DataKaryawan.department.ilike("%hr%")) | (DataKaryawan.department.ilike("%ga%")))
+        elif d.lower() in ("quality control", "quality assurance", "qc", "qa"):
+            query = query.filter((DataKaryawan.department.ilike("%quality%")) | (DataKaryawan.department.ilike("%qa%")) | (DataKaryawan.department.ilike("%qc%")))
+        elif d.lower() in ("supply chain / warehouse", "warehouse & delivery", "warehouse", "delivery"):
+            query = query.filter((DataKaryawan.department.ilike("%warehouse%")) | (DataKaryawan.department.ilike("%delivery%")))
+        else:
+            query = query.filter(DataKaryawan.department.ilike(f"%{d}%"))
     if contract_status:
-        query = query.filter(DataKaryawan.contract_status == contract_status)
+        cs = contract_status.strip().upper()
+        if cs == "PKWT":
+            query = query.filter(DataKaryawan.contract_status.ilike("PKWT%"))
+        elif cs == "TRAINEE":
+            query = query.filter(DataKaryawan.contract_status.ilike("Trainee%"))
+        elif cs == "PKWTT":
+            query = query.filter((DataKaryawan.contract_status.ilike("%PKWTT%")) | (DataKaryawan.contract_status.ilike("%Tetap%")))
+        elif cs == "EXPATRIATE":
+            query = query.filter((DataKaryawan.contract_status.ilike("%Expat%")) | (DataKaryawan.contract_status.ilike("%TSP%")))
+        else:
+            query = query.filter(DataKaryawan.contract_status.ilike(f"%{cs}%"))
     if employee_status:
         query = query.filter(DataKaryawan.employee_status == employee_status)
     if search:
@@ -753,7 +773,8 @@ def get_employees_list(
             (DataKaryawan.employee_id.ilike(s)) |
             (DataKaryawan.nik.ilike(s)) |
             (DataKaryawan.email.ilike(s)) |
-            (DataKaryawan.job_title.ilike(s))
+            (DataKaryawan.job_title.ilike(s)) |
+            (DataKaryawan.department.ilike(s))
         )
 
     employees = query.order_by(DataKaryawan.sequence_number.desc(), DataKaryawan.id.desc()).all()
