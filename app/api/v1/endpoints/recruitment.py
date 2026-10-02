@@ -734,6 +734,7 @@ def get_employees_list(
     department: Optional[str] = Query(None),
     contract_status: Optional[str] = Query(None),
     employee_status: Optional[str] = Query(None),
+    contract_eval: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     sort: Optional[str] = Query("desc"),
     db: Session = Depends(get_db),
@@ -797,9 +798,38 @@ def get_employees_list(
             query = query.filter((DataKaryawan.contract_status.ilike("%Expat%")) | (DataKaryawan.contract_status.ilike("%TSP%")))
         else:
             query = query.filter(DataKaryawan.contract_status.ilike(f"%{cs}%"))
-    if employee_status:
+    if contract_eval == "expiring_soon":
+        # Perlu evaluasi perpanjangan: kontrak habis dalam <= 30 hari ke depan, exclude PKWTT
+        now = datetime.now(timezone.utc)
+        thirty_days = now + timedelta(days=30)
+        lower_bound = now - timedelta(days=1)
+        query = query.filter(
+            DataKaryawan.contract_end_date.isnot(None),
+            DataKaryawan.contract_end_date >= lower_bound,
+            DataKaryawan.contract_end_date <= thirty_days,
+            ~DataKaryawan.contract_status.ilike("%PKWTT%"),
+            ~DataKaryawan.contract_status.ilike("%Tetap%"),
+        )
+        if not contract_status or contract_status.strip().upper() != "TRAINEE":
+            query = query.filter(~DataKaryawan.contract_status.ilike("Trainee%"))
+    elif contract_eval == "expired":
+        now = datetime.now(timezone.utc)
+        query = query.filter(
+            DataKaryawan.contract_end_date.isnot(None),
+            DataKaryawan.contract_end_date < now - timedelta(days=1),
+            ~DataKaryawan.contract_status.ilike("%PKWTT%"),
+            ~DataKaryawan.contract_status.ilike("%Tetap%"),
+        )
+    elif contract_eval == "safe":
+        now = datetime.now(timezone.utc)
+        thirty_days = now + timedelta(days=30)
+        query = query.filter(
+            DataKaryawan.contract_end_date.isnot(None),
+            DataKaryawan.contract_end_date > thirty_days,
+        )
+    if employee_status and employee_status != "all":
         query = query.filter(DataKaryawan.employee_status == employee_status)
-    else:
+    elif not employee_status:
         # By default, only show active employees (exclude resigned/terminated)
         query = query.filter(DataKaryawan.employee_status != "resign")
     if search:
