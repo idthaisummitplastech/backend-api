@@ -315,8 +315,9 @@ class DataKaryawan(Base):
     ptkp_status = Column(String(20), nullable=True)  # TK, K/0, K/1, K/2, K/3
     npwp = Column(String(50), nullable=True)
     bpjs_tk_no = Column(String(50), nullable=True)  # No. Jamsostek / BPJSTK
-    bank_account_no = Column(String(50), nullable=True)  # No. Rekening Payroll
-    bank_name = Column(String(50), default="BCA", nullable=True)
+    account_no = Column(String(50), nullable=True)  # Nomor Akun (Account No.)
+    bank_account_no = Column(String(50), nullable=True)  # No. Rekening Payroll (disiapkan untuk rekening bank)
+    bank_name = Column(String(50), nullable=True)  # Nama Bank Payroll (BCA, Mandiri, dll)
     job_title = Column(String(150), nullable=False)
     department = Column(String(100), index=True, nullable=False)
     work_location = Column(String(150), default="Plant PT ITSP Karawang", nullable=True)
@@ -333,6 +334,8 @@ class DataKaryawan(Base):
     employee_type = Column(String(50), nullable=True)  # Direct, Indirect, Admin, Thai Manager
     factory_office = Column(String(50), nullable=True)  # Factory, Office
     employee_status = Column(String(50), default="active", nullable=False)  # active, resign, end_of_contract
+    exit_date = Column(DateTime(timezone=True), nullable=True)  # Tanggal Keluar / Berakhir Kontrak
+    exit_reason = Column(String(255), nullable=True)  # Alasan: Habis Kontrak, Resign, PHK, Pensiun, dll
 
     # Berkas & Lampiran Dokumen
     photo_file = Column(Text, nullable=True)

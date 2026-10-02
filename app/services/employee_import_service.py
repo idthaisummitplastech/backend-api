@@ -134,7 +134,9 @@ def parse_employee_sheet(
     col_email = find_header_col(headers, ["email"])
     col_npwp = find_header_col(headers, ["npwp"])
     col_bpjs_tk = find_header_col(headers, ["jamsostek", "bpjs ketenagakerjaan", "kpj"])
-    col_bank_acc = find_header_col(headers, ["account no.", "account no", "rekening"])
+    col_account_no = find_header_col(headers, ["account no.", "account no", "account_no", "no akun", "no. akun"])
+    col_bank_acc = find_header_col(headers, ["no. rekening", "no rekening", "nomor rekening", "rekening bank", "rekening payroll", "bank account", "bank acc"])
+    col_bank_name = find_header_col(headers, ["nama bank", "bank name", "bank"])
     col_mother = find_header_col(headers, ["name of mother", "mother", "ibu"])
     col_father = find_header_col(headers, ["name of father", "father", "ayah"])
     col_spouse = find_header_col(headers, ["husband/wife name", "husband", "wife", "suami", "istri", "pasangan"])
@@ -291,7 +293,9 @@ def parse_employee_sheet(
         ptkp_val = clean_str(sheet.cell(r, col_kawin).value) if col_kawin else None
         npwp_val = clean_str(sheet.cell(r, col_npwp).value) if col_npwp else None
         bpjs_tk_val = clean_str(sheet.cell(r, col_bpjs_tk).value) if col_bpjs_tk else None
+        account_no_val = clean_str(sheet.cell(r, col_account_no).value) if col_account_no else None
         bank_acc_val = clean_str(sheet.cell(r, col_bank_acc).value) if col_bank_acc else None
+        bank_name_val = clean_str(sheet.cell(r, col_bank_name).value) if col_bank_name else None
 
         emp_data = {
             "employee_id": emp_id,
@@ -332,8 +336,9 @@ def parse_employee_sheet(
             "npwp_file": npwp_val,
             "bpjs_tk_no": bpjs_tk_val,
             "bpjs_ketenagakerjaan_file": bpjs_tk_val,
+            "account_no": account_no_val,
             "bank_account_no": bank_acc_val,
-            "bank_name": "BCA",
+            "bank_name": bank_name_val,
             "father_name": father if father != "0" else None,
             "mother_name": mother if mother != "0" else None,
             "spouse_name": spouse if spouse != "0" else None,

@@ -735,6 +735,7 @@ def get_employees_list(
     contract_status: Optional[str] = Query(None),
     employee_status: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    sort: Optional[str] = Query("desc"),
     db: Session = Depends(get_db),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "admin"])),
 ):
@@ -742,16 +743,44 @@ def get_employees_list(
     query = db.query(DataKaryawan)
     if department:
         d = department.strip()
-        if d.lower() in ("information technology", "it", "syd & it", "syd"):
-            query = query.filter((DataKaryawan.department.ilike("%it%")) | (DataKaryawan.department.ilike("%syd%")))
-        elif d.lower() in ("human resources & ga", "hr & ga", "hr", "hrga", "human resources"):
-            query = query.filter((DataKaryawan.department.ilike("%hr%")) | (DataKaryawan.department.ilike("%ga%")))
-        elif d.lower() in ("quality control", "quality assurance", "qc", "qa"):
-            query = query.filter((DataKaryawan.department.ilike("%quality%")) | (DataKaryawan.department.ilike("%qa%")) | (DataKaryawan.department.ilike("%qc%")))
-        elif d.lower() in ("supply chain / warehouse", "warehouse & delivery", "warehouse", "delivery"):
-            query = query.filter((DataKaryawan.department.ilike("%warehouse%")) | (DataKaryawan.department.ilike("%delivery%")))
+        d_lower = d.lower()
+        # Use exact case-insensitive match first, then fallback to grouped aliases
+        if d_lower in ("information technology", "it", "syd & it", "syd & it", "syd"):
+            # Match exactly "SYD & IT" or anything containing "SYD" — NOT broad "%it%"
+            query = query.filter(
+                (DataKaryawan.department.ilike("SYD & IT")) |
+                (DataKaryawan.department.ilike("SYD%IT%")) |
+                (DataKaryawan.department.ilike("%SYD%"))
+            )
+        elif d_lower in ("human resources & ga", "hr & ga", "hr", "hrga", "human resources"):
+            query = query.filter(
+                (DataKaryawan.department.ilike("HR & GA")) |
+                (DataKaryawan.department.ilike("%HR%GA%")) |
+                (DataKaryawan.department.ilike("Human Resources%"))
+            )
+        elif d_lower in ("quality control", "quality assurance", "qc", "qa"):
+            query = query.filter(
+                (DataKaryawan.department.ilike("Quality Assurance")) |
+                (DataKaryawan.department.ilike("Quality Control")) |
+                (DataKaryawan.department.ilike("%Quality%")) |
+                (DataKaryawan.department.ilike("%QA%")) |
+                (DataKaryawan.department.ilike("%QC%"))
+            )
+        elif d_lower in ("supply chain / warehouse", "warehouse & delivery", "warehouse", "delivery"):
+            query = query.filter(
+                (DataKaryawan.department.ilike("Warehouse & Delivery")) |
+                (DataKaryawan.department.ilike("%Warehouse%")) |
+                (DataKaryawan.department.ilike("%Delivery%"))
+            )
+        elif d_lower in ("accounting & finance", "accounting", "finance"):
+            query = query.filter(
+                (DataKaryawan.department.ilike("Accounting & Finance")) |
+                (DataKaryawan.department.ilike("%Accounting%")) |
+                (DataKaryawan.department.ilike("%Finance%"))
+            )
         else:
-            query = query.filter(DataKaryawan.department.ilike(f"%{d}%"))
+            # Exact match first, then partial
+            query = query.filter(DataKaryawan.department.ilike(d))
     if contract_status:
         cs = contract_status.strip().upper()
         if cs == "PKWT":
@@ -766,6 +795,9 @@ def get_employees_list(
             query = query.filter(DataKaryawan.contract_status.ilike(f"%{cs}%"))
     if employee_status:
         query = query.filter(DataKaryawan.employee_status == employee_status)
+    else:
+        # By default, only show active employees (exclude resigned/terminated)
+        query = query.filter(DataKaryawan.employee_status != "resign")
     if search:
         s = f"%{search.strip()}%"
         query = query.filter(
@@ -777,7 +809,10 @@ def get_employees_list(
             (DataKaryawan.department.ilike(s))
         )
 
-    employees = query.order_by(DataKaryawan.sequence_number.desc(), DataKaryawan.id.desc()).all()
+    if sort and str(sort).lower() == "asc":
+        employees = query.order_by(DataKaryawan.sequence_number.asc(), DataKaryawan.id.asc()).all()
+    else:
+        employees = query.order_by(DataKaryawan.sequence_number.desc(), DataKaryawan.id.desc()).all()
     return {
         "success": True,
         "total": len(employees),
@@ -857,6 +892,7 @@ def get_employees_list(
                 "plant": e.plant,
                 "npwp": e.npwp,
                 "bpjs_tk_no": e.bpjs_tk_no,
+                "account_no": e.account_no,
                 "bank_account_no": e.bank_account_no,
                 "bank_name": e.bank_name,
                 "father_name": e.father_name,
@@ -864,10 +900,24 @@ def get_employees_list(
                 "spouse_name": e.spouse_name,
                 "family_children": e.family_children,
                 "family_members_count": e.family_members_count,
+                "exit_date": e.exit_date.isoformat() if e.exit_date else None,
+                "exit_reason": e.exit_reason,
             }
             for e in employees
         ]
     }
+
+
+@router.get("/departments")
+def get_recruitment_departments(
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["admin", "hr", "user_dept"])),
+):
+    """Get list of distinct departments from data_karyawan for dropdown/autocomplete selection."""
+    depts = db.query(DataKaryawan.department).distinct().all()
+    clean_depts = sorted(list(set(d[0].strip() for d in depts if d[0] and d[0].strip())))
+    return {"success": True, "departments": clean_depts}
+
 
 
 @router.get("/employees/{id}")
@@ -973,6 +1023,7 @@ def get_employee_detail(
             "plant": emp.plant,
             "npwp": emp.npwp,
             "bpjs_tk_no": emp.bpjs_tk_no,
+            "account_no": emp.account_no,
             "bank_account_no": emp.bank_account_no,
             "bank_name": emp.bank_name,
             "father_name": emp.father_name,
@@ -980,6 +1031,8 @@ def get_employee_detail(
             "spouse_name": emp.spouse_name,
             "family_children": emp.family_children,
             "family_members_count": emp.family_members_count,
+            "exit_date": emp.exit_date.isoformat() if emp.exit_date else None,
+            "exit_reason": emp.exit_reason,
         }
     }
 
@@ -1015,9 +1068,9 @@ def update_employee(
         "full_name", "phone", "email", "job_title", "department", "work_location",
         "salary", "contract_status", "contract_sequence", "contract_history", "years_of_service",
         "level", "section", "employee_type", "factory_office",
-        "payroll_id", "plant", "ptkp_status", "npwp", "bpjs_tk_no", "bank_account_no", "bank_name",
+        "payroll_id", "plant", "ptkp_status", "npwp", "bpjs_tk_no", "account_no", "bank_account_no", "bank_name",
         "father_name", "mother_name", "spouse_name", "family_children", "family_members_count",
-        "employee_status", "notes", "blood_type",
+        "employee_status", "exit_date", "exit_reason", "notes", "blood_type",
         "marriage_status", "address_ktp", "address_domicile",
         "nik", "birth_place", "age", "gender", "religion",
         "last_education", "major", "school_name", "photo_file",
@@ -1206,4 +1259,233 @@ def delete_employee(
 
     crud_data_karyawan.remove(db, id=id)
     return {"success": True, "message": f"Data karyawan {emp.full_name} ({emp.employee_id}) berhasil dihapus."}
+
+
+@router.post("/employees")
+def create_employee_manual(
+    payload: Dict[str, Any],
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["admin", "hr"])),
+):
+    """Create a new employee manually (PKWT, PKWTT, Trainee, Expatriate)."""
+    full_name = str(payload.get("full_name") or "").strip()
+    if not full_name:
+        raise HTTPException(status_code=400, detail="Nama lengkap wajib diisi.")
+
+    contract_status = str(payload.get("contract_status") or "PKWT").strip()
+    job_title = str(payload.get("job_title") or "Staff").strip()
+    department = str(payload.get("department") or "General").strip()
+
+    # Determine or generate employee ID
+    custom_emp_id = str(payload.get("employee_id") or "").strip()
+    start_date_raw = payload.get("contract_start_date") or payload.get("join_date")
+    start_date = None
+    if start_date_raw:
+        try:
+            start_date = datetime.fromisoformat(str(start_date_raw)[:10]).replace(tzinfo=timezone.utc)
+        except Exception:
+            start_date = datetime.now(timezone.utc)
+    else:
+        start_date = datetime.now(timezone.utc)
+
+    if custom_emp_id:
+        exist = db.query(DataKaryawan).filter(DataKaryawan.employee_id == custom_emp_id).first()
+        if exist:
+            raise HTTPException(status_code=400, detail=f"ID Karyawan {custom_emp_id} sudah digunakan.")
+        emp_id = custom_emp_id
+        seq_num = None
+    else:
+        preview = crud_data_karyawan.preview_next_employee_id(db, join_date_val=start_date)
+        emp_id = preview["preview_employee_id"]
+        seq_num = preview["next_sequence"]
+        crud_data_karyawan.set_last_sequence(db, seq_num)
+
+    end_date_raw = payload.get("contract_end_date")
+    end_date = None
+    if end_date_raw and "PKWTT" not in contract_status.upper():
+        try:
+            end_date = datetime.fromisoformat(str(end_date_raw)[:10]).replace(tzinfo=timezone.utc)
+        except Exception:
+            end_date = None
+
+    birth_date_raw = payload.get("birth_date")
+    birth_date = None
+    if birth_date_raw:
+        try:
+            birth_date = datetime.fromisoformat(str(birth_date_raw)[:10]).replace(tzinfo=timezone.utc)
+        except Exception:
+            birth_date = None
+
+    emp = DataKaryawan(
+        employee_id=emp_id,
+        sequence_number=seq_num,
+        full_name=full_name,
+        nik=str(payload.get("nik") or "").strip() or None,
+        phone=str(payload.get("phone") or "").strip() or None,
+        email=str(payload.get("email") or f"{emp_id.replace('.', '').lower()}@itsp.co.id").strip(),
+        gender=payload.get("gender") or "Laki-laki",
+        birth_place=payload.get("birth_place"),
+        birth_date=birth_date,
+        age=int(payload.get("age")) if payload.get("age") else None,
+        religion=payload.get("religion"),
+        marriage_status=payload.get("marriage_status"),
+        address_ktp=payload.get("address_ktp"),
+        address_domicile=payload.get("address_domicile"),
+        job_title=job_title,
+        department=department,
+        section=payload.get("section"),
+        level=payload.get("level"),
+        plant=payload.get("plant") or "KIIC",
+        work_location=payload.get("work_location") or "Plant PT ITSP Karawang",
+        employee_type=payload.get("employee_type") or "Direct",
+        contract_status=contract_status,
+        contract_start_date=start_date,
+        contract_end_date=end_date,
+        salary=str(payload.get("salary") or "").strip() or None,
+        ptkp_status=payload.get("ptkp_status") or "TK",
+        npwp=payload.get("npwp"),
+        bpjs_tk_no=payload.get("bpjs_tk_no"),
+        account_no=payload.get("account_no"),
+        bank_name=payload.get("bank_name"),
+        bank_account_no=payload.get("bank_account_no"),
+        father_name=payload.get("father_name"),
+        mother_name=payload.get("mother_name"),
+        spouse_name=payload.get("spouse_name"),
+        last_education=payload.get("last_education"),
+        school_name=payload.get("school_name"),
+        major=payload.get("major"),
+        notes=payload.get("notes"),
+        employee_status="active",
+    )
+    db.add(emp)
+    db.commit()
+    db.refresh(emp)
+    return {
+        "success": True,
+        "message": f"Karyawan baru {emp.full_name} ({emp.employee_id}) berhasil ditambahkan ke database.",
+        "employee_id": emp.employee_id,
+        "id": emp.id,
+    }
+
+
+@router.post("/employees/{id}/terminate")
+def terminate_employee(
+    id: int,
+    payload: Dict[str, Any],
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["admin", "hr"])),
+):
+    """Mark an employee as exited / not renewed (Karyawan Keluar / Habis Kontrak)."""
+    emp = crud_data_karyawan.get(db, id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Data karyawan tidak ditemukan.")
+
+    exit_reason = str(payload.get("exit_reason") or "Habis Kontrak (Tidak Diperpanjang)").strip()
+    exit_date_raw = payload.get("exit_date")
+    if exit_date_raw:
+        try:
+            exit_date = datetime.fromisoformat(str(exit_date_raw)[:10]).replace(tzinfo=timezone.utc)
+        except Exception:
+            exit_date = datetime.now(timezone.utc)
+    else:
+        exit_date = datetime.now(timezone.utc)
+
+    notes = str(payload.get("notes") or "").strip()
+    emp.employee_status = "resign"
+    emp.exit_date = exit_date
+    emp.exit_reason = exit_reason
+    if notes:
+        existing_notes = emp.notes or ""
+        emp.notes = f"{existing_notes}\n[Catatan Keluar {exit_date.strftime('%Y-%m-%d')}]: {notes}".strip()
+
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Status karyawan {emp.full_name} ({emp.employee_id}) berhasil diubah menjadi Karyawan Keluar ({exit_reason}).",
+    }
+
+
+@router.get("/employees-retention")
+def get_employee_retention(
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["admin", "hr"])),
+):
+    """Get retention setting and counts of exited employees and expired retention."""
+    retention_val = crud_setting.get_value(db, "employee_exit_retention_months", "12")
+    try:
+        retention_months = int(retention_val)
+    except (ValueError, TypeError):
+        retention_months = 12
+
+    exited_query = db.query(DataKaryawan).filter(DataKaryawan.employee_status == "resign")
+    total_exited = exited_query.count()
+
+    expired_count = 0
+    if retention_months > 0:
+        threshold = datetime.now(timezone.utc) - timedelta(days=retention_months * 30)
+        expired_count = exited_query.filter(
+            (DataKaryawan.exit_date.isnot(None) & (DataKaryawan.exit_date < threshold)) |
+            (DataKaryawan.exit_date.is_(None) & (DataKaryawan.contract_end_date < threshold))
+        ).count()
+
+    return {
+        "success": True,
+        "retention_months": retention_months,
+        "total_exited": total_exited,
+        "expired_count": expired_count,
+    }
+
+
+@router.post("/employees-retention")
+def set_employee_retention(
+    payload: Dict[str, Any],
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["admin", "hr"])),
+):
+    """Save retention setting for exited employees."""
+    months = int(payload.get("retention_months", 12))
+    crud_setting.set_value(db, "employee_exit_retention_months", str(months))
+    return {
+        "success": True,
+        "retention_months": months,
+        "message": f"Masa retensi riwayat karyawan keluar berhasil diatur menjadi {months} bulan ({'1 tahun' if months==12 else str(months) + ' bulan'}).",
+    }
+
+
+@router.post("/employees-retention/cleanup")
+def cleanup_expired_exited_employees(
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["admin", "hr"])),
+):
+    """Permanently delete exited employee records older than retention period."""
+    retention_val = crud_setting.get_value(db, "employee_exit_retention_months", "12")
+    try:
+        retention_months = int(retention_val)
+    except (ValueError, TypeError):
+        retention_months = 12
+
+    if retention_months <= 0:
+        return {"success": True, "deleted_count": 0, "message": "Retensi diatur selamanya. Tidak ada data yang dihapus."}
+
+    threshold = datetime.now(timezone.utc) - timedelta(days=retention_months * 30)
+    to_delete = db.query(DataKaryawan).filter(
+        DataKaryawan.employee_status == "resign",
+        (
+            (DataKaryawan.exit_date.isnot(None) & (DataKaryawan.exit_date < threshold)) |
+            (DataKaryawan.exit_date.is_(None) & (DataKaryawan.contract_end_date < threshold))
+        )
+    ).all()
+
+    deleted_count = 0
+    for e in to_delete:
+        db.delete(e)
+        deleted_count += 1
+    db.commit()
+
+    return {
+        "success": True,
+        "deleted_count": deleted_count,
+        "message": f"Berhasil membersihkan {deleted_count} data riwayat karyawan keluar yang telah melewati batas retensi ({retention_months} bulan).",
+    }
+
 
