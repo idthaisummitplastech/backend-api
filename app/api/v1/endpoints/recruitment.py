@@ -784,7 +784,11 @@ def get_employees_list(
     if contract_status:
         cs = contract_status.strip().upper()
         if cs == "PKWT":
-            query = query.filter(DataKaryawan.contract_status.ilike("PKWT%"))
+            # Exclude PKWTT — only match PKWT 1, PKWT 2, etc.
+            query = query.filter(
+                DataKaryawan.contract_status.ilike("PKWT%"),
+                ~DataKaryawan.contract_status.ilike("PKWTT%")
+            )
         elif cs == "TRAINEE":
             query = query.filter(DataKaryawan.contract_status.ilike("Trainee%"))
         elif cs == "PKWTT":
