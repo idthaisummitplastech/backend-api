@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import auth, jobs, applicants, recruitment, tests, cms
+from app.api.v1.endpoints import auth, jobs, applicants, recruitment, tests, cms, departments
 
 api_router = APIRouter()
 
@@ -9,3 +9,4 @@ api_router.include_router(applicants.router, prefix="/applicants", tags=["Applic
 api_router.include_router(recruitment.router, prefix="/recruitment", tags=["Recruitment 7-Stage Pipeline"])
 api_router.include_router(tests.router, prefix="/tests", tags=["Online Tests & Anti-Cheat Engine"])
 api_router.include_router(cms.router, prefix="/cms", tags=["Company Profile CMS"])
+api_router.include_router(departments.router, prefix="/departments", tags=["Departments & Sections"])

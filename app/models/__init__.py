@@ -1,5 +1,6 @@
 """Models package exporting all ORM database models."""
 from app.models.auth import RecruitmentAdmin, User
+from app.models.department import Department, Section
 from app.models.recruitment import (
     JobPosting,
     Applicant,
@@ -31,6 +32,8 @@ from app.models.cms import (
 __all__ = [
     "RecruitmentAdmin",
     "User",
+    "Department",
+    "Section",
     "JobPosting",
     "Applicant",
     "InterviewSchedule",

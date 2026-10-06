@@ -20,6 +20,7 @@ class JobPosting(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     title = Column(String(255), nullable=False)
     department = Column(String(100), nullable=False)
+    section = Column(String(150), nullable=True)  # Sub-bagian dalam departemen
     location = Column(String(150), default="Karawang / Cikarang", nullable=False)
     type = Column(String(50), default="Full-Time", nullable=False)
     experience = Column(String(100), default="1-3 Tahun", nullable=False)

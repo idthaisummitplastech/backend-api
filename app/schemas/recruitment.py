@@ -9,6 +9,7 @@ from app.schemas.tests import TestSubmissionResponse
 class JobPostingBase(BaseModel):
     title: str
     department: str
+    section: Optional[str] = None
     location: str = "Karawang / Cikarang"
     type: str = "Full-Time"
     experience: str = "1-3 Tahun"
@@ -26,6 +27,7 @@ class JobPostingCreate(JobPostingBase):
 class JobPostingUpdate(BaseModel):
     title: Optional[str] = None
     department: Optional[str] = None
+    section: Optional[str] = None
     location: Optional[str] = None
     type: Optional[str] = None
     experience: Optional[str] = None
