@@ -121,6 +121,9 @@ def is_dept_match(q_dept: Optional[str], target_dept: Optional[str]) -> bool:
     # IT aliases
     it_keywords = [
         "it",
+        "syd & it",
+        "syd",
+        "syd_it",
         "information technology",
         "teknologi informasi",
         "it & systems",
