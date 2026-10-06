@@ -70,6 +70,15 @@ def run_update():
     except Exception as e:
         print(f"\n[Info] Update recruitment_admins dilewati: {e}")
 
+    # 4. Update data_karyawan jika ada yang departemennya Information Technology / Engineering
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE data_karyawan SET department = 'SYD & IT' WHERE department IN ('Information Technology', 'IT') OR department ILIKE '%Information Technology%'"))
+            conn.execute(text("UPDATE data_karyawan SET department = 'Maintenance' WHERE department IN ('Engineering & Tooling', 'Engineering') OR department ILIKE '%Engineering%'"))
+            print("[OK] Tabel data_karyawan diperbarui.")
+    except Exception as e:
+        print(f"[Info] Update data_karyawan dilewati: {e}")
+
     db.commit()
     print("\n" + "=" * 60)
     print("SELESAI! Semua departemen & section telah diperbarui.")
