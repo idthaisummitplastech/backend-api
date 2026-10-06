@@ -61,14 +61,14 @@ def run_update():
             elif qd in ["engineering", "engineering & tooling"]:
                 q.department = "Maintenance"
 
-    # 3. Update Users / Staff jika ada yang departemennya Information Technology
+    # 3. Update recruitment_admins jika ada yang departemennya Information Technology
     try:
         with engine.begin() as conn:
-            conn.execute(text("UPDATE users SET department = 'SYD & IT' WHERE department IN ('Information Technology', 'IT')"))
-            conn.execute(text("UPDATE users SET department = 'Maintenance' WHERE department = 'Engineering & Tooling'"))
-            print("\n[OK] Tabel users diperbarui jika ada departemen lama.")
+            conn.execute(text("UPDATE recruitment_admins SET department = 'SYD & IT' WHERE department IN ('Information Technology', 'IT')"))
+            conn.execute(text("UPDATE recruitment_admins SET department = 'Maintenance' WHERE department = 'Engineering & Tooling'"))
+            print("\n[OK] Tabel recruitment_admins diperbarui.")
     except Exception as e:
-        print(f"\n[Info] Update users dilewati: {e}")
+        print(f"\n[Info] Update recruitment_admins dilewati: {e}")
 
     db.commit()
     print("\n" + "=" * 60)
