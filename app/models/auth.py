@@ -16,6 +16,8 @@ class RecruitmentAdmin(Base):
     department = Column(String(100), nullable=True)
     mfa_secret = Column(String(100), nullable=True)
     is_mfa_enabled = Column(Boolean, default=False, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    portal_access = Column(String(20), default="both", nullable=False)  # perusahaan | karir | both
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
@@ -33,6 +35,8 @@ class User(Base):
     mfa_enabled = Column(Boolean, default=False, nullable=False)
     mfa_secret = Column(String(100), nullable=True)
     backup_codes = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    portal_access = Column(String(20), default="both", nullable=False)  # perusahaan | karir | both
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),

@@ -27,6 +27,25 @@ class NavMenuItem(BaseModel):
     sort_order: int = 0
     is_active: bool = True
     is_maintenance: bool = False
+    portal: str = "perusahaan"  # perusahaan | karir | both
+    allowed_roles: Optional[str] = None  # CSV or null = all
+    icon: Optional[str] = None
+    parent_id: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminMenuItem(BaseModel):
+    id: Optional[int] = None
+    title: str
+    url: str
+    portal: str = "perusahaan"  # perusahaan | karir | both
+    location: str = "admin_sidebar"  # admin_sidebar | admin_top
+    icon: Optional[str] = None
+    section: Optional[str] = None
+    sort_order: int = 0
+    is_active: bool = True
+    allowed_roles: Optional[str] = None
     parent_id: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)

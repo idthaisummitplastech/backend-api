@@ -9,6 +9,7 @@ from app.crud.crud_cms import CMSModelRegistry, crud_contact
 from app.models.cms import (
     SiteSetting,
     NavMenu,
+    AdminMenu,
     HeroSection,
     Product,
     Certification,
@@ -69,6 +70,49 @@ def reorder_nav_menus(
                     menu.parent_id = int(parent_id) if parent_id else None
     db.commit()
     return ApiResponse(message="Urutan menu navigasi berhasil diperbarui.")
+
+
+# --- ADMIN MENUS (DINAMIS SIDEBAR & TOP NAV) ---
+@router.get("/admin-menus")
+def list_admin_menus(
+    portal: Optional[str] = Query(None, description="perusahaan | karir | both"),
+    location: Optional[str] = Query(None, description="admin_sidebar | admin_top"),
+    role: Optional[str] = Query(None, description="filter by role, e.g. admin"),
+    db: Session = Depends(get_db),
+):
+    """Public read for admin nav — filter by portal/location/role. is_active=true only."""
+    q = db.query(AdminMenu).filter(AdminMenu.is_active == True)  # noqa: E712
+    if portal:
+        q = q.filter((AdminMenu.portal == portal) | (AdminMenu.portal == "both"))
+    if location:
+        q = q.filter(AdminMenu.location == location)
+    if role:
+        # allowed_roles NULL = allow all, else CSV contains role
+        q = q.filter((AdminMenu.allowed_roles.is_(None)) | (AdminMenu.allowed_roles.ilike(f"%{role}%")))
+    items = q.order_by(AdminMenu.sort_order.asc(), AdminMenu.id.asc()).all()
+    data = [{c.name: getattr(it, c.name) for c in it.__table__.columns} for it in items]
+    return ApiResponse(data=data)
+
+
+@router.post("/admin-menus/reorder")
+def reorder_admin_menus(
+    payload: List[Dict[str, Any]],
+    db: Session = Depends(get_db),
+    _admin=Depends(RoleChecker(["admin"])),
+):
+    """Reorder admin menu items."""
+    for item in payload:
+        menu_id = item.get("id")
+        sort_order = item.get("sort_order") if "sort_order" in item else item.get("sortOrder", 0)
+        parent_id = item.get("parent_id") if "parent_id" in item else item.get("parentId")
+        if menu_id:
+            menu = db.query(AdminMenu).filter(AdminMenu.id == menu_id).first()
+            if menu:
+                menu.sort_order = int(sort_order)
+                if parent_id is not None:
+                    menu.parent_id = int(parent_id) if parent_id else None
+    db.commit()
+    return ApiResponse(message="Urutan menu admin berhasil diperbarui.")
 
 
 # --- DASHBOARD STATS FOR WEB PERUSAHAAN ---
@@ -249,6 +293,8 @@ def get_cms_items(
                         department=ra.department,
                         mfa_enabled=ra.is_mfa_enabled,
                         mfa_secret=ra.mfa_secret,
+                        is_active=getattr(ra, "is_active", True),
+                        portal_access=getattr(ra, "portal_access", "both") or "both",
                     )
                     db.add(new_u)
                     synced_to_company = True
@@ -260,13 +306,24 @@ def get_cms_items(
                     elif not getattr(cu, "username", None) and ra.username:
                         cu.username = ra.username
                         synced_to_company = True
-
                     if getattr(cu, "department", None) and not ra.department:
                         ra.department = cu.department
                         karir_db.commit()
                     elif not getattr(cu, "department", None) and ra.department:
                         cu.department = ra.department
                         synced_to_company = True
+                    # sync is_active/portal_access
+                    try:
+                        if hasattr(cu, "is_active") and hasattr(ra, "is_active"):
+                            if cu.is_active != ra.is_active:
+                                cu.is_active = ra.is_active
+                                synced_to_company = True
+                        if hasattr(cu, "portal_access") and hasattr(ra, "portal_access"):
+                            if (cu.portal_access or "both") != (ra.portal_access or "both"):
+                                cu.portal_access = ra.portal_access
+                                synced_to_company = True
+                    except Exception:
+                        pass
             if synced_to_company:
                 db.commit()
         except Exception:
@@ -300,6 +357,8 @@ def get_cms_items(
                         department=getattr(cu, "department", None) or dept_default,
                         is_mfa_enabled=cu.mfa_enabled,
                         mfa_secret=cu.mfa_secret,
+                        is_active=getattr(cu, "is_active", True),
+                        portal_access=getattr(cu, "portal_access", "both") or "both",
                     )
                     karir_db.add(new_ra)
                     synced_to_rec = True
@@ -345,7 +404,7 @@ def get_cms_items(
         else:
             raise exc
 
-    # Map of rec_admins by email for department & username enrichment
+    # Map of rec_admins by email for enrichment
     rec_admin_map = {}
     if model == "users":
         try:
@@ -356,7 +415,6 @@ def get_cms_items(
     results = []
     for item in items:
         d = {c.name: getattr(item, c.name) for c in item.__table__.columns}
-        # Hide raw passwords when querying users and enrich with department & username
         if model == "users":
             if "password" in d:
                 d["password"] = "******"
@@ -372,6 +430,14 @@ def get_cms_items(
             d["department"] = getattr(item, "department", None) or (ra.department if (ra and ra.department) else None) or dept_default
             d["is_mfa_enabled"] = bool(d.get("mfa_enabled") or (ra and ra.is_mfa_enabled))
             d["isMfaEnabled"] = d["is_mfa_enabled"]
+            # expose is_active & portal_access with fallback
+            d["is_active"] = bool(d.get("is_active", True) if d.get("is_active") is not None else True)
+            if ra and hasattr(ra, "is_active"):
+                # prefer DB truth (already synced)
+                pass
+            d["portal_access"] = (d.get("portal_access") or (getattr(ra, "portal_access", None) if ra else None) or "both")
+            d["portalAccess"] = d["portal_access"]
+            d["isActive"] = d["is_active"]
         results.append(d)
 
     return ApiResponse(data=results)
@@ -498,6 +564,15 @@ def create_cms_item(
         }.get(normalized_data.get("role"), "General Management")
         normalized_data["department"] = (normalized_data.get("department") or dept_default).strip()
 
+        # Defaults for new fields
+        if not normalized_data.get("is_active") and "is_active" not in normalized_data:
+            normalized_data["is_active"] = True
+        # validate portal_access
+        pa = str(normalized_data.get("portal_access") or "both").lower().strip()
+        if pa not in ("perusahaan","karir","both"):
+            pa = "both"
+        normalized_data["portal_access"] = pa
+
         pwd = normalized_data.get("password")
         if pwd and not str(pwd).startswith("$2b$"):
             normalized_data["password"] = get_password_hash(str(pwd))
@@ -521,7 +596,7 @@ def create_cms_item(
             detail=f"Gagal menyimpan data: {err_str[:150]}",
         )
 
-    # If new user has an admin/hr/user_dept role, also sync to Career Portal
+    # If new user has an admin/hr/user_dept role, also sync to Career Portal (with is_active + portal_access)
     if model == "users" and normalized_data.get("role") in ["admin", "hr", "user_dept"]:
         try:
             email_val = normalized_data.get("email")
@@ -547,6 +622,8 @@ def create_cms_item(
                     role=normalized_data.get("role"),
                     department=dept_val,
                     is_mfa_enabled=bool(normalized_data.get("mfa_enabled", False)),
+                    is_active=bool(normalized_data.get("is_active", True)),
+                    portal_access=str(normalized_data.get("portal_access", "both")),
                 )
                 karir_db.add(new_rec)
                 karir_db.commit()
@@ -557,6 +634,11 @@ def create_cms_item(
                     existing_rec.department = normalized_data["department"].strip()
                 existing_rec.name = normalized_data.get("name", existing_rec.name)
                 existing_rec.role = normalized_data.get("role", existing_rec.role)
+                try:
+                    existing_rec.is_active = bool(normalized_data.get("is_active", existing_rec.is_active))
+                    existing_rec.portal_access = str(normalized_data.get("portal_access", getattr(existing_rec, "portal_access", "both") or "both"))
+                except Exception:
+                    pass
                 karir_db.commit()
         except Exception:
             karir_db.rollback()
@@ -624,7 +706,6 @@ def update_cms_item(
 
             if rec_admin:
                 if new_username:
-                    # Check if username is taken by another admin
                     other_u = karir_db.query(RecruitmentAdmin).filter(
                         (RecruitmentAdmin.username.ilike(new_username)) & (RecruitmentAdmin.id != rec_admin.id)
                     ).first()
@@ -640,9 +721,15 @@ def update_cms_item(
                     rec_admin.department = new_dept
                 if "password" in normalized_data and normalized_data["password"]:
                     rec_admin.password = normalized_data["password"]
+                # Sync is_active & portal_access
+                if "is_active" in normalized_data:
+                    rec_admin.is_active = bool(normalized_data["is_active"])
+                if "portal_access" in normalized_data and normalized_data["portal_access"]:
+                    pa2 = str(normalized_data["portal_access"]).lower().strip()
+                    if pa2 in ("perusahaan","karir","both"):
+                        rec_admin.portal_access = pa2
                 karir_db.commit()
             else:
-                # If rec_admin doesn't exist yet, create it
                 target_role = normalized_data.get("role", getattr(item, "role", "hr"))
                 if target_role in ["admin", "hr", "user_dept"]:
                     target_email = (normalized_data.get("email") or old_email or "").strip().lower()
@@ -661,6 +748,8 @@ def update_cms_item(
                         department=new_dept or "Human Capital",
                         is_mfa_enabled=getattr(item, "mfa_enabled", False),
                         mfa_secret=getattr(item, "mfa_secret", None),
+                        is_active=bool(normalized_data.get("is_active", True)),
+                        portal_access=str(normalized_data.get("portal_access", "both")),
                     )
                     karir_db.add(new_ra)
                     karir_db.commit()

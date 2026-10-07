@@ -52,6 +52,8 @@ class AdminBase(BaseModel):
     role: str = "hr"
     department: Optional[str] = None
     is_mfa_enabled: bool = False
+    is_active: bool = True
+    portal_access: str = "both"  # perusahaan | karir | both
 
 
 class AdminCreate(AdminBase):
@@ -64,6 +66,8 @@ class AdminUpdate(BaseModel):
     role: Optional[str] = None
     department: Optional[str] = None
     password: Optional[str] = Field(None, min_length=6)
+    is_active: Optional[bool] = None
+    portal_access: Optional[str] = None
 
 
 class AdminResponse(AdminBase):
@@ -79,6 +83,8 @@ class UserResponse(BaseModel):
     email: EmailStr
     role: str
     mfa_enabled: bool
+    is_active: bool = True
+    portal_access: str = "both"
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

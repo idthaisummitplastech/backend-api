@@ -14,6 +14,7 @@ from app.models.recruitment import (  # noqa
 from app.models.cms import (  # noqa
     SiteSetting,
     NavMenu,
+    AdminMenu,
     HeroSection,
     Announcement,
     Partner,
@@ -28,4 +29,5 @@ from app.models.cms import (  # noqa
     Certification,
     Facility,
     SustainabilityReport,
+    CustomPage,
 )

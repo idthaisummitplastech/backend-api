@@ -32,9 +32,14 @@ def get_current_admin(
             try:
                 admin_found = crud_admin.get(db, int(admin_id_hdr))
                 if admin_found:
+                    # hormati is_active jika ada
+                    if hasattr(admin_found, "is_active") and getattr(admin_found, "is_active") is False:
+                        raise HTTPException(status_code=403, detail="Akun dinonaktifkan.")
                     return admin_found
             except (ValueError, TypeError):
                 pass
+            except HTTPException:
+                raise
 
         if admin_role_hdr:
             return RecruitmentAdmin(

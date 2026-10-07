@@ -32,7 +32,7 @@ def login_cms_user(
     payload: Dict[str, Any],
     db: Session = Depends(get_db_company),
 ):
-    """CMS Admin authentication for Company Profile."""
+    """CMS Admin authentication for Company Profile — hormati is_active & portal_access."""
     email = str(payload.get("email", "")).strip().lower()
     password = str(payload.get("password", ""))
     if not email or not password:
@@ -41,6 +41,15 @@ def login_cms_user(
     user = db.query(User).filter(User.email == email).first()
     if not user or not verify_password(password, user.password):
         raise HTTPException(status_code=401, detail="Email atau password salah.")
+
+    # Toggle active — jika dinonaktifkan, tolak login di semua portal
+    if hasattr(user, "is_active") and getattr(user, "is_active") is False:
+        raise HTTPException(status_code=403, detail="Akun Anda dinonaktifkan oleh Administrator. Hubungi admin untuk aktivasi kembali.")
+
+    # Portal access — cms-login hanya untuk web-perusahaan
+    pa = getattr(user, "portal_access", "both") or "both"
+    if pa not in ("perusahaan", "both"):
+        raise HTTPException(status_code=403, detail="Akun Anda tidak memiliki akses ke Web Perusahaan. Minta admin mengaktifkan portal_access = Perusahaan atau Keduanya.")
 
     token = create_access_token(
         subject=str(user.id),
@@ -124,7 +133,12 @@ def login_ats_admin(
             if not is_pwd_valid:
                 raise HTTPException(status_code=401, detail="Password salah. Silakan coba kembali.")
 
-            # RBAC
+            # RBAC + portal active check for ATS
+            if hasattr(cms_user, "is_active") and getattr(cms_user, "is_active") is False:
+                raise HTTPException(status_code=403, detail="Akun Anda dinonaktifkan oleh Administrator.")
+            pa_cms = getattr(cms_user, "portal_access", "both") or "both"
+            if pa_cms not in ("karir", "both"):
+                raise HTTPException(status_code=403, detail="Akun Anda tidak memiliki akses ke Portal Karir. Minta admin set portal_access = Karir / Keduanya.")
             allowed_roles = ["admin", "hr", "user_dept"]
             if cms_user.role == "marketing":
                 raise HTTPException(status_code=403, detail="Akses Ditolak: Akun Tim Marketing tidak memiliki hak akses ke Portal Karir & Rekrutmen ATS.")
@@ -297,6 +311,12 @@ def login_ats_admin(
 
         if not verify_password(password, local_admin.password):
             raise HTTPException(status_code=401, detail="Password salah. Silakan coba kembali.")
+
+        if hasattr(local_admin, "is_active") and getattr(local_admin, "is_active") is False:
+            raise HTTPException(status_code=403, detail="Akun Anda dinonaktifkan oleh Administrator.")
+        pa_local = getattr(local_admin, "portal_access", "both") or "both"
+        if pa_local not in ("karir", "both"):
+            raise HTTPException(status_code=403, detail="Akun Anda tidak memiliki akses ke Portal Karir. Minta admin set portal_access = Karir / Keduanya.")
 
         # MFA for local admin
         if not local_admin.is_mfa_enabled or not local_admin.mfa_secret:

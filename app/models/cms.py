@@ -28,14 +28,36 @@ class NavMenu(Base, TimestampMixin):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     title = Column(String(150), nullable=False)
     url = Column(String(255), nullable=False)
-    location = Column(String(100), nullable=False)
+    location = Column(String(100), nullable=False)  # navbar | footer | admin_sidebar | admin_top
     section = Column(String(100), nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     is_maintenance = Column(Boolean, default=False, nullable=False)
+    portal = Column(String(20), default="perusahaan", nullable=False)  # perusahaan | karir | both
+    allowed_roles = Column(String(255), nullable=True)  # CSV or NULL = all
+    icon = Column(String(100), nullable=True)  # MUI icon name
     parent_id = Column(Integer, ForeignKey("nav_menus.id", ondelete="CASCADE"), nullable=True)
 
     children = relationship("NavMenu", backref="parent", remote_side=[id])
+
+
+class AdminMenu(Base, TimestampMixin):
+    """Dynamic admin navigation — sidebar web-perusahaan & top nav web-karir."""
+    __tablename__ = "admin_menus"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    title = Column(String(150), nullable=False)
+    url = Column(String(255), nullable=False)
+    portal = Column(String(20), default="perusahaan", nullable=False)  # perusahaan | karir | both
+    location = Column(String(100), default="admin_sidebar", nullable=False)  # admin_sidebar | admin_top
+    icon = Column(String(100), nullable=True)
+    section = Column(String(100), nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    allowed_roles = Column(String(255), nullable=True)  # CSV or NULL
+    parent_id = Column(Integer, ForeignKey("admin_menus.id", ondelete="CASCADE"), nullable=True)
+
+    children = relationship("AdminMenu", backref="parent", remote_side=[id])
 
 
 class HeroSection(Base, TimestampMixin):

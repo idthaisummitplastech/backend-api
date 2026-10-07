@@ -5,6 +5,7 @@ from app.db.base_class import Base
 from app.models.cms import (
     SiteSetting,
     NavMenu,
+    AdminMenu,
     HeroSection,
     Announcement,
     Partner,
@@ -33,6 +34,7 @@ class CMSModelRegistry:
     _MODELS: Dict[str, Type[Base]] = {
         "settings": SiteSetting,
         "nav-menus": NavMenu,
+        "admin-menus": AdminMenu,
         "hero-sections": HeroSection,
         "announcements": Announcement,
         "partners": Partner,
