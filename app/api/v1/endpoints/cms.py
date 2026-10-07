@@ -266,7 +266,7 @@ def get_cms_items(
     karir_db: Session = Depends(get_karir_db),
 ):
     """
-    Retrieve dynamic CMS records for Web Perusahaan & Web Karir.
+    Retrieve dynamic CMS records for Web Company & Web Karir.
     Supports: settings, nav-menus, hero-sections, announcements, partners,
     features, services, products, blog-posts, testimonials, faqs, statistics,
     certifications, facilities, sustainability-reports, users.

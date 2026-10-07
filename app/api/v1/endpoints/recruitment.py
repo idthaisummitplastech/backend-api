@@ -628,7 +628,7 @@ def hire_and_sign_contract(
     dept = payload.get("department") or (applicant.job_posting.department if applicant.job_posting else "General")
     title = payload.get("job_title") or (applicant.job_posting.title if applicant.job_posting else "Karyawan")
     loc = payload.get("work_location") or "Plant PT ITSP Karawang"
-    sal = payload.get("salary") or applicant.offering_salary or "Sesuai Standar Perusahaan"
+    sal = payload.get("salary") or applicant.offering_salary or "Sesuai Standar Company"
     c_status = payload.get("contract_status") or "PKWT 1"
 
     emp = DataKaryawan(
@@ -1153,7 +1153,7 @@ def download_employee_template():
         os.path.join(os.path.dirname(__file__), "..", "..", "..", "static", "Template_Master_Karyawan_ITSP.xlsx")
     )
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File template tidak ditemukan.")
+        raise HTTPException(status_code=404, detail="Template file not found.")
     return FileResponse(
         file_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

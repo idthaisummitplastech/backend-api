@@ -376,7 +376,7 @@ class RecruitmentWorkflowService:
                 applicant.current_stage = 7
                 applicant.stage_status = "in_progress"
                 applicant.offering_status = "issued"
-                applicant.offering_salary = payload.salary_offer or "Sesuai Standar Perusahaan"
+                applicant.offering_salary = payload.salary_offer or "Sesuai Standar Company"
                 applicant.offering_letter = payload.notes or "Draft Surat Penawaran Kerja (Offering Letter) Resmi PT ITSP."
                 if payload.offering_attachment:
                     applicant.offering_attachment = payload.offering_attachment

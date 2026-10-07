@@ -409,7 +409,7 @@ class EmailNotificationService:
         {f'<p style="color: #475569; font-size: 13px;"><em>Catatan: {notes}</em></p>' if notes else ''}
         <p>Silakan login ke Portal Karir untuk melihat perkembangan dan informasi terbaru terkait proses rekrutmen Anda.</p>
         """
-        html = self._wrap_corporate_template(subject, content, "Akses Portal Karir", f"{settings.FRONTEND_CAREER_URL}/portal/dashboard")
+        html = self._wrap_corporate_template(subject, content, "Portal Access Karir", f"{settings.FRONTEND_CAREER_URL}/portal/dashboard")
         return self.send_email(to_email, subject, html)
 
     def send_stage_reminder(self, to_email: str, name: str, position: str, stage: int, stage_status: Optional[str] = None) -> Dict[str, Any]:

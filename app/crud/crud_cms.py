@@ -28,7 +28,7 @@ from app.models.auth import User
 class CMSModelRegistry:
     """
     Central dynamic model registry mapping URL slugs to ORM models.
-    Enables zero-boilerplate, generic CRUD operations for Web Perusahaan CMS.
+    Enables zero-boilerplate, generic CRUD operations for Web Company CMS.
     """
 
     _MODELS: Dict[str, Type[Base]] = {

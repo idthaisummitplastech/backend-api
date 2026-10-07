@@ -34,7 +34,7 @@ def get_current_admin(
                 if admin_found:
                     # hormati is_active jika ada
                     if hasattr(admin_found, "is_active") and getattr(admin_found, "is_active") is False:
-                        raise HTTPException(status_code=403, detail="Akun dinonaktifkan.")
+                        raise HTTPException(status_code=403, detail="Account deactivated.")
                     return admin_found
             except (ValueError, TypeError):
                 pass
