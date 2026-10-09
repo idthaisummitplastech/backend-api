@@ -177,6 +177,50 @@ def init_db(db: Session) -> None:
         )
         logger.info("Default User Dept evaluator created: user_it (password via SEED_IT_PASSWORD / acak)")
 
+    # 3b. Primary Superadmin ITSP.1526.08.26 / it-04@thaisummit.co.id — Employee ID immutable, portal both
+    # Login utama pakai Employee ID; email fallback 6 bulan. Password default Itsp@YYYY (is_first_login=true).
+    it04 = crud_admin.get_by_employee_id(db, "ITSP.1526.08.26")
+    it04_email = crud_admin.get_by_email(db, "it-04@thaisummit.co.id")
+    if not it04 and not it04_email:
+        from app.schemas.auth import get_default_password as _gdp
+        it04_password = os.getenv("SEED_IT04_PASSWORD") or _gdp()
+        crud_admin.create(
+            db,
+            obj_in=AdminCreate(
+                employee_id="ITSP.1526.08.26",
+                username="it-04",
+                name="IT Admin",
+                email="it-04@thaisummit.co.id",
+                password=it04_password,
+                role="admin",
+                department="IT",
+                portal_access="both",
+                is_active=True,
+                is_first_login=True,
+            ),
+        )
+        logger.info("Primary superadmin ensured: ITSP.1526.08.26 / it-04@thaisummit.co.id (role=admin, portal=both)")
+    else:
+        target = it04 or it04_email
+        needs = []
+        if target.role != "admin":
+            target.role = "admin"; needs.append("role->admin")
+        if (getattr(target, "portal_access", None) or "") != "both":
+            target.portal_access = "both"; needs.append("portal->both")
+        if not getattr(target, "is_active", True):
+            target.is_active = True; needs.append("is_active->true")
+        if (target.employee_id or "") != "ITSP.1526.08.26":
+            target.employee_id = "ITSP.1526.08.26"; needs.append("employee_id")
+        if (getattr(target, "email", "") or "").lower() != "it-04@thaisummit.co.id":
+            target.email = "it-04@thaisummit.co.id"; needs.append("email")
+        if (getattr(target, "username", "") or "") != "it-04":
+            target.username = "it-04"; needs.append("username")
+        if needs:
+            db.add(target); db.commit(); db.refresh(target)
+            logger.info(f"Primary superadmin promoted: {', '.join(needs)}")
+        else:
+            logger.info("Primary superadmin already present: ITSP.1526.08.26")
+
     # 4. Master Recruitment Settings
     default_settings = {
         "mcu_clinic_name": "Klinik Pramita / Prodia Karawang",

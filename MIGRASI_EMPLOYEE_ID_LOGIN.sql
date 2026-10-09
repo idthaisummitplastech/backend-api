@@ -61,3 +61,48 @@ COMMENT ON COLUMN public.users.is_first_login IS 'true=wajib ganti password Itsp
 --   AS dk(lc TEXT, employee_id VARCHAR(50))
 -- WHERE u.employee_id IS NULL AND lower(trim(u.email)) = dk.lc;
 
+-- ============ C) PROMOTE PRIMARY SUPERADMIN ITSP.1526.08.26 / it-04@thaisummit.co.id ============
+-- Super Admin utama — Employee ID immutable, role admin, portal both, password default Itsp@2026 (is_first_login=true)
+-- Jalankan di KEDUA DB (web_karir + web_perusahaan). Idempotent — aman di-rerun.
+-- Prasyarat: kolom employee_id sudah ada (bagian A/B di atas) + pgcrypto untuk crypt.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- web_karir: recruitment_admins
+-- C1) Jika sudah ada by email/username -> promote + reset password
+UPDATE public.recruitment_admins
+SET employee_id='ITSP.1526.08.26', username='it-04', name='IT Admin',
+    role='admin', department='IT', is_active=true, portal_access='both',
+    is_first_login=true, password=crypt('Itsp@2026', gen_salt('bf',10))
+WHERE lower(email)=lower('it-04@thaisummit.co.id')
+   OR lower(username)=lower('it-04')
+   OR employee_id='ITSP.1526.08.26';
+-- C2) Jika belum ada sama sekali -> insert
+INSERT INTO public.recruitment_admins (employee_id, username, name, email, password, role, department, is_active, portal_access, is_first_login, is_mfa_enabled)
+SELECT 'ITSP.1526.08.26','it-04','IT Admin','it-04@thaisummit.co.id',crypt('Itsp@2026', gen_salt('bf',10)),'admin','IT',true,'both',true,false
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.recruitment_admins
+  WHERE employee_id='ITSP.1526.08.26'
+     OR lower(email)=lower('it-04@thaisummit.co.id')
+     OR lower(username)=lower('it-04')
+);
+
+-- web_perusahaan: users (CMS) — jalankan setelah \c web_perusahaan
+UPDATE public.users
+SET employee_id='ITSP.1526.08.26', username='it-04', name='IT Admin',
+    role='admin', department='IT', is_active=true, portal_access='both',
+    is_first_login=true, password=crypt('Itsp@2026', gen_salt('bf',10))
+WHERE lower(email)=lower('it-04@thaisummit.co.id')
+   OR (username IS NOT NULL AND lower(username)=lower('it-04'))
+   OR employee_id='ITSP.1526.08.26';
+INSERT INTO public.users (employee_id, username, email, password, name, role, department, mfa_enabled, is_active, portal_access, is_first_login)
+SELECT 'ITSP.1526.08.26','it-04','it-04@thaisummit.co.id',crypt('Itsp@2026', gen_salt('bf',10)),'IT Admin','admin','IT',false,true,'both',true
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.users
+  WHERE employee_id='ITSP.1526.08.26'
+     OR lower(email)=lower('it-04@thaisummit.co.id')
+     OR (username IS NOT NULL AND lower(username)=lower('it-04'))
+);
+-- Verifikasi: SELECT employee_id, username, email, role, is_active, portal_access, is_first_login FROM public.recruitment_admins WHERE employee_id='ITSP.1526.08.26';
+-- Verifikasi: SELECT employee_id, username, email, role, is_active, portal_access, is_first_login FROM public.users WHERE employee_id='ITSP.1526.08.26';
+-- Login test: Employee ID = ITSP.1526.08.26  |  fallback email = it-04@thaisummit.co.id  |  password = Itsp@2026 (wajib ganti saat first login)
+
