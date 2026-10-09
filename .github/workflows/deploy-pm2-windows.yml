@@ -25,10 +25,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           Set-Location D:\itsp-backend
-
-          git config --global --add safe.directory D:/itsp-backend 2>$null
-          git config --global --add safe.directory D:\itsp-backend 2>$null
-          git config --global --add safe.directory '*' 2>$null
+          try { Remove-Item -Path "$env:USERPROFILE\.gitconfig.lock" -Force -ErrorAction SilentlyContinue } catch {}
+          try { git config --global --add safe.directory '*' 2>$null } catch {}
 
           $extraPaths = @(
             (Join-Path $env:APPDATA "npm"),
