@@ -444,12 +444,20 @@ def create_recruitment_admin(
     db: Session = Depends(get_db),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["admin"])),
 ):
-    """Create recruitment ATS admin user."""
+    """Create recruitment ATS admin user — Employee ID immutable, password default Itsp@YYYY."""
     existing = crud_admin.get_by_username(db, payload.username)
     if existing:
         raise HTTPException(status_code=400, detail="Username sudah digunakan.")
+    if payload.email:
+        if crud_admin.get_by_email(db, str(payload.email)):
+            raise HTTPException(status_code=400, detail="Email sudah digunakan.")
+    if getattr(payload, "employee_id", None):
+        eid = str(payload.employee_id).strip()
+        if eid and crud_admin.get_by_employee_id(db, eid):
+            raise HTTPException(status_code=400, detail=f"Employee ID {eid} sudah digunakan.")
+    # allow empty password -> CRUD will hash Itsp@YYYY automatically
     new_admin = crud_admin.create(db, obj_in=payload)
-    return ApiResponse(data=AdminResponse.model_validate(new_admin), message="Akun admin rekrutmen berhasil dibuat.")
+    return ApiResponse(data=AdminResponse.model_validate(new_admin), message=f"Akun admin rekrutmen berhasil dibuat. Password default: Itsp@{__import__('datetime').datetime.now(__import__('datetime').timezone.utc).year} (wajib ganti saat login pertama).")
 
 
 @router.put("/admins/{id}", response_model=ApiResponse[AdminResponse])
@@ -459,10 +467,21 @@ def update_recruitment_admin(
     db: Session = Depends(get_db),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["admin"])),
 ):
-    """Update recruitment admin."""
+    """Update recruitment admin — Employee ID immutable, email tetap audit."""
     admin = crud_admin.get(db, id)
     if not admin:
         raise HTTPException(status_code=404, detail="Admin tidak ditemukan.")
+    # validate dup employee_id if changing
+    if getattr(payload, "employee_id", None) is not None:
+        eid = str(payload.employee_id).strip() if payload.employee_id else ""
+        if eid and eid != getattr(admin, "employee_id", None):
+            dup = crud_admin.get_by_employee_id(db, eid)
+            if dup and dup.id != admin.id:
+                raise HTTPException(status_code=400, detail=f"Employee ID {eid} sudah digunakan.")
+    if getattr(payload, "email", None):
+        dupE = crud_admin.get_by_email(db, str(payload.email))
+        if dupE and dupE.id != admin.id:
+            raise HTTPException(status_code=400, detail="Email sudah digunakan.")
     updated = crud_admin.update(db, db_obj=admin, obj_in=payload)
     return ApiResponse(data=AdminResponse.model_validate(updated), message="Data admin berhasil diperbarui.")
 
@@ -479,6 +498,21 @@ def delete_recruitment_admin(
         raise HTTPException(status_code=404, detail="Admin tidak ditemukan.")
     crud_admin.remove(db, id=id)
     return StatusResponse(message="Akun admin berhasil dihapus.")
+
+
+@router.post("/admins/{id}/reset-password", response_model=StatusResponse)
+def reset_recruitment_admin_password(
+    id: int,
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["admin"])),
+):
+    """Reset password admin ke Itsp@YYYY (tahun berjalan) — hash only on reset, is_first_login=true."""
+    admin = crud_admin.get(db, id)
+    if not admin:
+        raise HTTPException(status_code=404, detail="Admin tidak ditemukan.")
+    from app.schemas.auth import get_default_password
+    crud_admin.reset_to_default_password(db, db_obj=admin)
+    return StatusResponse(message=f"Password {admin.employee_id or admin.username} direset ke {get_default_password()} — wajib ganti saat login.")
 
 
 @router.get("/karyawan-sementara", response_model=ApiResponse[List[KaryawanSementaraResponse]])

@@ -1,6 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field
+
+
+def get_default_password() -> str:
+    """Dynamic default password Itsp@YYYY — YYYY = current year, hash only on create/reset."""
+    return f"Itsp@{datetime.now(timezone.utc).year}"
 
 
 class Token(BaseModel):
@@ -16,6 +21,8 @@ class Token(BaseModel):
     requires_mfa: bool = False
     id: Optional[int] = None
     applicant_id: Optional[int] = None
+    is_first_login: Optional[bool] = None
+    employee_id: Optional[str] = None
 
 
 class TokenPayload(BaseModel):
@@ -26,9 +33,20 @@ class TokenPayload(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username_or_email: str = Field(..., min_length=3, max_length=255)
+    # Employee ID primary (004.02.16) — dual-mode fallback to username/email for 6 months
+    username_or_email: str = Field(
+        ..., min_length=3, max_length=255,
+        validation_alias=AliasChoices("username_or_email", "employee_id", "employee_id_or_email", "login", "email"),
+        description="Employee ID (004.02.16) primary, email/username fallback",
+    )
+    # Alias helper for frontend baru
+    employee_id_or_email: Optional[str] = Field(None, validation_alias=AliasChoices("employee_id_or_email", "employeeId"))
     password: str = Field(..., min_length=4)
     totp_code: Optional[str] = Field(None, min_length=6, max_length=6)
+
+    @property
+    def login_identifier(self) -> str:
+        return (self.employee_id_or_email or self.username_or_email or "").strip()
 
 
 class ApplicantLoginRequest(BaseModel):
@@ -46,6 +64,7 @@ class MFAVerifyRequest(BaseModel):
 
 
 class AdminBase(BaseModel):
+    employee_id: Optional[str] = Field(None, max_length=50, description="Employee ID immutable 004.02.16")
     username: str
     name: str
     email: EmailStr
@@ -54,13 +73,16 @@ class AdminBase(BaseModel):
     is_mfa_enabled: bool = False
     is_active: bool = True
     portal_access: str = "both"  # perusahaan | karir | both
+    is_first_login: bool = True
 
 
 class AdminCreate(AdminBase):
-    password: str = Field(..., min_length=6)
+    # password optional — jika kosong pakai Itsp@YYYY
+    password: Optional[str] = Field(None, min_length=6)
 
 
 class AdminUpdate(BaseModel):
+    employee_id: Optional[str] = Field(None, max_length=50)
     name: Optional[str] = None
     email: Optional[EmailStr] = None
     role: Optional[str] = None
@@ -68,11 +90,13 @@ class AdminUpdate(BaseModel):
     password: Optional[str] = Field(None, min_length=6)
     is_active: Optional[bool] = None
     portal_access: Optional[str] = None
+    is_first_login: Optional[bool] = None
 
 
 class AdminResponse(AdminBase):
     id: int
     created_at: datetime
+    employee_id: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

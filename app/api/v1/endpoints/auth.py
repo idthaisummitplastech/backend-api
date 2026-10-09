@@ -32,15 +32,45 @@ def login_cms_user(
     payload: Dict[str, Any],
     db: Session = Depends(get_db_company),
 ):
-    """CMS Admin authentication for Company Profile — hormati is_active & portal_access."""
-    email = str(payload.get("email", "")).strip().lower()
+    """CMS Admin authentication — Employee ID primary (004.02.16) dual-mode fallback email/username, hormati is_active & portal_access."""
+    raw_id = str(payload.get("employee_id", "") or payload.get("employee_id_or_email", "") or payload.get("email", "") or payload.get("username", "") or payload.get("login", "")).strip()
     password = str(payload.get("password", ""))
-    if not email or not password:
-        raise HTTPException(status_code=400, detail="Email and password are required.")
-
-    user = db.query(User).filter(User.email == email).first()
+    if not raw_id or not password:
+        raise HTTPException(status_code=400, detail="Employee ID / Email and password are required.")
+    # Dual-mode: employee_id exact -> username ilike -> email ilike
+    user = None
+    if raw_id:
+        try:
+            user = db.query(User).filter(User.employee_id == raw_id).first()
+        except Exception:
+            user = None
+    if not user:
+        # try username exact lower
+        try:
+            user = db.query(User).filter(User.username.ilike(raw_id)).first()
+        except Exception:
+            user = None
+    if not user:
+        user = db.query(User).filter(User.email.ilike(raw_id.strip().lower())).first()
+        # also handle bare username -> try email with @itsp.co.id
+        if not user and "@" not in raw_id:
+            user = db.query(User).filter(User.email.ilike(f"{raw_id.lower()}@itsp.co.id")).first()
     if not user or not verify_password(password, user.password):
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
+        raise HTTPException(status_code=401, detail="Invalid Employee ID / Email or password.")
+    # resign guard via employee_id -> DataKaryawan (if same DB, else skip gracefully)
+    try:
+        eid = getattr(user, "employee_id", None)
+        if eid:
+            from app.models.recruitment import DataKaryawan
+            # only if DataKaryawan table exists in this DB (web_perusahaan separate) try company DB? try get_db mapping
+            # attempt to query via current db (may be empty) - safe to skip if table not in this engine
+            dk = db.query(DataKaryawan).filter(DataKaryawan.employee_id == eid).first() if hasattr(DataKaryawan, "employee_id") else None
+            if dk and getattr(dk, "employee_status", None) == "resign":
+                raise HTTPException(status_code=403, detail="Akun karyawan sudah resign — akses ditolak. Hubungi HR.")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
 
     # Active toggle — if deactivated, deny login on all portals
     if hasattr(user, "is_active") and getattr(user, "is_active") is False:
@@ -55,7 +85,7 @@ def login_cms_user(
         subject=str(user.id),
         role=user.role,
         department=getattr(user, "department", None),
-        extra_claims={"email": user.email, "name": user.name}
+        extra_claims={"email": user.email, "name": user.name, "employee_id": getattr(user, "employee_id", None)}
     )
     has_secret = bool(user.mfa_secret)
     return {
@@ -63,14 +93,17 @@ def login_cms_user(
         "token": token,
         "user": {
             "id": user.id,
+            "employee_id": getattr(user, "employee_id", None),
             "email": user.email,
             "name": user.name,
             "role": user.role,
             "mfa_enabled": user.mfa_enabled,
             "has_mfa_secret": has_secret,
+            "is_first_login": getattr(user, "is_first_login", False),
         },
         "requires_mfa": user.mfa_enabled,
         "has_mfa_secret": has_secret,
+        "is_first_login": getattr(user, "is_first_login", False),
     }
 
 
@@ -89,20 +122,38 @@ def login_ats_admin(
     3. Handle MFA setup/verify and bidirectional sync without database constraint errors
     """
     try:
-        username = str(payload.get("username", "")).strip()
+        # Employee ID primary (004.02.16) dual-mode fallback username/email
+        raw_identifier = str(payload.get("employee_id", "") or payload.get("employee_id_or_email", "") or payload.get("login", "") or payload.get("username", "") or payload.get("email", "")).strip()
         password = str(payload.get("password", ""))
         mfa_code = str(payload.get("mfa_code") or payload.get("mfaCode", "")).strip()
+        username = raw_identifier  # keep legacy variable name for downstream logic
 
-        if not username or not password:
-            raise HTTPException(status_code=400, detail="Username/Email and password are required.")
+        if not raw_identifier or not password:
+            raise HTTPException(status_code=400, detail="Employee ID / Username / Email and password are required.")
 
-        clean_input = username.lower()
+        # Employee ID exact lookup priority before email/username normalization
+        # If raw looks like employee_id (contains dot), keep case exact for employee_id queries
+        clean_input = raw_identifier.lower()
         if clean_input.endswith("@itsp.com"):
             clean_input = clean_input.replace("@itsp.com", "@itsp.co.id")
 
-        # 1. Check central CMS users (web_perusahaan)
-        target_email = clean_input if "@" in clean_input else f"{clean_input}@itsp.co.id"
-        cms_user = db_company.query(User).filter(User.email.ilike(target_email)).first()
+        # Fast path: try employee_id exact on CMS users and local admins
+        cms_by_eid = None
+        local_by_eid = None
+        try:
+            cms_by_eid = db_company.query(User).filter(User.employee_id == raw_identifier).first()
+        except Exception:
+            cms_by_eid = None
+        try:
+            local_by_eid = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.employee_id == raw_identifier).first()
+        except Exception:
+            local_by_eid = None
+
+        # 1. Check central CMS users (web_perusahaan) — employee_id first
+        cms_user = cms_by_eid
+        if not cms_user:
+            target_email = clean_input if "@" in clean_input else f"{clean_input}@itsp.co.id"
+            cms_user = db_company.query(User).filter(User.email.ilike(target_email)).first()
 
         if not cms_user and "@" not in clean_input:
             cms_user = db_company.query(User).filter(User.email.ilike(clean_input)).first()
@@ -301,10 +352,18 @@ def login_ats_admin(
                 },
             }
 
-        # 2. Fallback to local recruitment_admins (web_karir)
-        local_admin = db.query(RecruitmentAdmin).filter(
-            (RecruitmentAdmin.username.ilike(clean_input)) | (RecruitmentAdmin.email.ilike(clean_input))
-        ).first()
+        # 2. Fallback to local recruitment_admins (web_karir) — employee_id first
+        local_admin = local_by_eid
+        if not local_admin:
+            local_admin = db.query(RecruitmentAdmin).filter(
+                (RecruitmentAdmin.username.ilike(clean_input)) | (RecruitmentAdmin.email.ilike(clean_input))
+            ).first()
+            if not local_admin and "@" not in clean_input:
+                # also try exact employee_id case (already done) but safe retry
+                try:
+                    local_admin = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.employee_id == raw_identifier).first()
+                except Exception:
+                    pass
 
         if not local_admin:
             raise HTTPException(status_code=401, detail="Kredensial login tidak ditemukan. Periksa kembali username/email Anda.")
@@ -419,10 +478,18 @@ def login_admin(
     payload: LoginRequest,
     db: Session = Depends(get_db),
 ):
-    """Admin & Evaluator authentication with rate-limiting and 2FA support."""
+    """Admin & Evaluator authentication — Employee ID primary (004.02.16) dual-mode fallback."""
+    identifier = getattr(payload, "login_identifier", None) or payload.username_or_email
+    if callable(identifier):
+        identifier = identifier  # shouldn't happen
+    # login_identifier is property, so call str
+    try:
+        identifier = payload.login_identifier
+    except Exception:
+        identifier = payload.username_or_email
     return auth_service.authenticate_admin(
         db,
-        username_or_email=payload.username_or_email,
+        username_or_email=identifier,
         password=payload.password,
         totp_code=payload.totp_code,
     )

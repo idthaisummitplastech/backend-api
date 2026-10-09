@@ -4,10 +4,11 @@ from app.db.base_class import Base
 
 
 class RecruitmentAdmin(Base):
-    """Admin and Evaluator accounts for Recruitment Portal with RBAC and MFA."""
+    """Admin and Evaluator accounts for Recruitment Portal with RBAC and MFA — login via Employee ID."""
     __tablename__ = "recruitment_admins"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    employee_id = Column(String(50), unique=True, index=True, nullable=True)  # Immutable FK data_karyawan.employee_id 004.02.16
     username = Column(String(100), unique=True, index=True, nullable=False)
     name = Column(String(200), nullable=False)
     email = Column(String(255), unique=True, index=True, nullable=False)
@@ -18,14 +19,16 @@ class RecruitmentAdmin(Base):
     is_mfa_enabled = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     portal_access = Column(String(20), default="both", nullable=False)  # perusahaan | karir | both
+    is_first_login = Column(Boolean, default=True, nullable=False)  # true=wajib ganti Itsp@YYYY
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class User(Base):
-    """Company Profile CMS Admin User."""
+    """Company Profile CMS Admin User — login via Employee ID."""
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    employee_id = Column(String(50), unique=True, index=True, nullable=True)  # Immutable FK data_karyawan.employee_id
     username = Column(String(100), unique=True, index=True, nullable=True)
     email = Column(String(255), unique=True, index=True, nullable=False)
     password = Column(String(255), nullable=False)  # Bcrypt hash
@@ -37,6 +40,7 @@ class User(Base):
     backup_codes = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     portal_access = Column(String(20), default="both", nullable=False)  # perusahaan | karir | both
+    is_first_login = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),

@@ -23,20 +23,37 @@ class AuthService:
         password: str,
         totp_code: Optional[str] = None,
     ) -> Token:
-        """Authenticate HR or User Dept Admin with optional MFA TOTP validation."""
+        """Authenticate HR/Admin via Employee ID primary (004.02.16) → username → email fallback + resign/is_active guard."""
+        raw = (username_or_email or "").strip()
         admin = crud_admin.authenticate(
-            db, username_or_email=username_or_email, password=password
+            db, username_or_email=raw, password=password
         )
         if not admin:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Username/email atau password salah.",
+                detail="Employee ID / Username / Email atau password salah.",
             )
+
+        # is_active guard
+        if hasattr(admin, "is_active") and getattr(admin, "is_active") is False:
+            raise HTTPException(status_code=403, detail="Akun Anda telah dinonaktifkan oleh Administrator.")
+
+        # employee_status resign guard (if linked to data_karyawan)
+        try:
+            emp_id = getattr(admin, "employee_id", None)
+            if emp_id:
+                from app.models.recruitment import DataKaryawan
+                dk = db.query(DataKaryawan).filter(DataKaryawan.employee_id == emp_id).first()
+                if dk and getattr(dk, "employee_status", None) == "resign":
+                    raise HTTPException(status_code=403, detail="Akun karyawan sudah resign — akses ditolak. Hubungi HR.")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
 
         # Check MFA if enabled
         if admin.is_mfa_enabled:
             if not totp_code:
-                # Return signal that MFA token is required
                 return Token(
                     access_token="",
                     expires_in=0,
@@ -45,6 +62,8 @@ class AuthService:
                     email=admin.email,
                     department=admin.department,
                     requires_mfa=True,
+                    employee_id=getattr(admin, "employee_id", None),
+                    is_first_login=getattr(admin, "is_first_login", False),
                 )
             if not verify_totp(admin.mfa_secret or "", totp_code):
                 raise HTTPException(
@@ -52,12 +71,11 @@ class AuthService:
                     detail="Kode Autentikasi 2FA (TOTP) tidak valid atau kedaluwarsa.",
                 )
 
-        # Generate JWT Token
         token = create_access_token(
             subject=admin.id,
             role=admin.role,
             department=admin.department,
-            extra_claims={"name": admin.name, "email": admin.email, "type": "admin"},
+            extra_claims={"name": admin.name, "email": admin.email, "type": "admin", "employee_id": getattr(admin, "employee_id", None)},
         )
         return Token(
             access_token=token,
@@ -67,6 +85,8 @@ class AuthService:
             email=admin.email,
             department=admin.department,
             requires_mfa=False,
+            employee_id=getattr(admin, "employee_id", None),
+            is_first_login=getattr(admin, "is_first_login", False),
         )
 
     def authenticate_applicant(
