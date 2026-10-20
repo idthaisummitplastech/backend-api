@@ -1183,15 +1183,304 @@ def download_employee_template():
     import os
     from fastapi.responses import FileResponse
 
-    file_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "static", "Template_Master_Karyawan_ITSP.xlsx")
-    )
-    if not os.path.exists(file_path):
+    candidate_paths = [
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "static", "Template_Master_Karyawan_ITSP.xlsx")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "app", "static", "Template_Master_Karyawan_ITSP.xlsx")),
+        os.path.abspath(os.path.join(os.getcwd(), "app", "static", "Template_Master_Karyawan_ITSP.xlsx")),
+        os.path.abspath(os.path.join(os.getcwd(), "static", "Template_Master_Karyawan_ITSP.xlsx")),
+        os.path.abspath(os.path.join(os.getcwd(), "..", "web-karir v1.0", "public", "templates", "Template_Master_Karyawan_ITSP.xlsx")),
+    ]
+    file_path = next((p for p in candidate_paths if os.path.exists(p)), None)
+    if not file_path:
         raise HTTPException(status_code=404, detail="Template file not found.")
     return FileResponse(
         file_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename="Template_Master_Karyawan_ITSP.xlsx",
+    )
+
+
+@router.get("/employees/export")
+def export_employees_excel(
+    department: Optional[str] = Query(None),
+    contract_status: Optional[str] = Query(None),
+    employee_status: Optional[str] = Query(None),
+    contract_eval: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    sort: Optional[str] = Query("desc"),
+    db: Session = Depends(get_db),
+    _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "admin"])),
+):
+    """Export filtered or complete employee data to formatted Microsoft Excel (.xlsx) file."""
+    import io
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from fastapi.responses import Response
+
+    query = db.query(DataKaryawan)
+    if department:
+        d = department.strip()
+        d_lower = d.lower()
+        if d_lower in ("information technology", "it", "syd & it", "syd"):
+            query = query.filter(
+                (DataKaryawan.department.ilike("SYD & IT")) |
+                (DataKaryawan.department.ilike("SYD%IT%")) |
+                (DataKaryawan.department.ilike("%SYD%"))
+            )
+        elif d_lower in ("human resources & ga", "hr & ga", "hr", "hrga", "human resources"):
+            query = query.filter(
+                (DataKaryawan.department.ilike("HR & GA")) |
+                (DataKaryawan.department.ilike("%HR%GA%")) |
+                (DataKaryawan.department.ilike("Human Resources%"))
+            )
+        elif d_lower in ("quality control", "quality assurance", "qc", "qa"):
+            query = query.filter(
+                (DataKaryawan.department.ilike("Quality Assurance")) |
+                (DataKaryawan.department.ilike("Quality Control")) |
+                (DataKaryawan.department.ilike("%Quality%")) |
+                (DataKaryawan.department.ilike("%QA%")) |
+                (DataKaryawan.department.ilike("%QC%"))
+            )
+        elif d_lower in ("supply chain / warehouse", "warehouse & delivery", "warehouse", "delivery"):
+            query = query.filter(
+                (DataKaryawan.department.ilike("Warehouse & Delivery")) |
+                (DataKaryawan.department.ilike("%Warehouse%")) |
+                (DataKaryawan.department.ilike("%Delivery%"))
+            )
+        elif d_lower in ("accounting & finance", "accounting", "finance"):
+            query = query.filter(
+                (DataKaryawan.department.ilike("Accounting & Finance")) |
+                (DataKaryawan.department.ilike("%Accounting%")) |
+                (DataKaryawan.department.ilike("%Finance%"))
+            )
+        else:
+            query = query.filter(DataKaryawan.department.ilike(d))
+
+    if contract_status:
+        cs = contract_status.strip().upper()
+        if cs == "PKWT":
+            query = query.filter(
+                DataKaryawan.contract_status.ilike("PKWT%"),
+                ~DataKaryawan.contract_status.ilike("PKWTT%")
+            )
+        elif cs == "TRAINEE":
+            query = query.filter(DataKaryawan.contract_status.ilike("Trainee%"))
+        elif cs == "PKWTT":
+            query = query.filter((DataKaryawan.contract_status.ilike("%PKWTT%")) | (DataKaryawan.contract_status.ilike("%Tetap%")))
+        elif cs == "EXPATRIATE":
+            query = query.filter((DataKaryawan.contract_status.ilike("%Expat%")) | (DataKaryawan.contract_status.ilike("%TSP%")))
+        else:
+            query = query.filter(DataKaryawan.contract_status.ilike(f"%{cs}%"))
+
+    if contract_eval == "expiring_soon":
+        now = datetime.now(timezone.utc)
+        thirty_days = now + timedelta(days=30)
+        lower_bound = now - timedelta(days=1)
+        query = query.filter(
+            DataKaryawan.contract_end_date.isnot(None),
+            DataKaryawan.contract_end_date >= lower_bound,
+            DataKaryawan.contract_end_date <= thirty_days,
+            ~DataKaryawan.contract_status.ilike("%PKWTT%"),
+            ~DataKaryawan.contract_status.ilike("%Tetap%"),
+        )
+    elif contract_eval == "expired":
+        now = datetime.now(timezone.utc)
+        query = query.filter(
+            DataKaryawan.contract_end_date.isnot(None),
+            DataKaryawan.contract_end_date < now - timedelta(days=1),
+            ~DataKaryawan.contract_status.ilike("%PKWTT%"),
+            ~DataKaryawan.contract_status.ilike("%Tetap%"),
+        )
+    elif contract_eval == "safe":
+        now = datetime.now(timezone.utc)
+        thirty_days = now + timedelta(days=30)
+        query = query.filter(
+            DataKaryawan.contract_end_date.isnot(None),
+            DataKaryawan.contract_end_date > thirty_days,
+        )
+
+    if employee_status and employee_status != "all":
+        query = query.filter(DataKaryawan.employee_status == employee_status)
+
+    if search:
+        s = f"%{search.strip()}%"
+        query = query.filter(
+            (DataKaryawan.full_name.ilike(s)) |
+            (DataKaryawan.employee_id.ilike(s)) |
+            (DataKaryawan.payroll_id.ilike(s)) |
+            (DataKaryawan.nik.ilike(s)) |
+            (DataKaryawan.email.ilike(s)) |
+            (DataKaryawan.department.ilike(s)) |
+            (DataKaryawan.job_title.ilike(s))
+        )
+
+    if sort == "asc":
+        query = query.order_by(DataKaryawan.sequence_number.asc(), DataKaryawan.id.asc())
+    else:
+        query = query.order_by(DataKaryawan.sequence_number.desc(), DataKaryawan.id.desc())
+
+    employees = query.all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Master Karyawan"
+
+    headers = [
+        "No",
+        "ID Karyawan",
+        "Payroll ID",
+        "Nama Lengkap",
+        "NIK KTP",
+        "Jenis Kelamin",
+        "Tempat Lahir",
+        "Tanggal Lahir",
+        "Usia",
+        "Agama",
+        "Status Pernikahan",
+        "Status PTKP",
+        "No. HP / WA",
+        "Email",
+        "Alamat KTP Lengkap",
+        "RT KTP",
+        "RW KTP",
+        "Kelurahan KTP",
+        "Kecamatan KTP",
+        "Kota / Kab KTP",
+        "Provinsi KTP",
+        "Alamat Domisili",
+        "Pendidikan Terakhir",
+        "Nama Sekolah / Kampus",
+        "Jurusan",
+        "Departemen",
+        "Section",
+        "Jabatan / Posisi",
+        "Level",
+        "Plant",
+        "Tipe Karyawan",
+        "Status Kontrak",
+        "Tgl Mulai Kontrak",
+        "Tgl Selesai Kontrak",
+        "Gaji Disepakati",
+        "No. NPWP",
+        "No. BPJS Ketenagakerjaan",
+        "Status Kepegawaian",
+        "Tgl Keluar",
+        "Alasan Keluar",
+        "Catatan HR",
+    ]
+
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="018730", end_color="018730", fill_type="solid")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    thin_border_side = Side(border_style="thin", color="D1D5DB")
+    cell_border = Border(left=thin_border_side, right=thin_border_side, top=thin_border_side, bottom=thin_border_side)
+    alt_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+
+    ws.row_dimensions[1].height = 28
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = cell_border
+
+    for row_idx, emp in enumerate(employees, 2):
+        bdate = emp.birth_date.strftime("%Y-%m-%d") if emp.birth_date else ""
+        sdate = emp.contract_start_date.strftime("%Y-%m-%d") if emp.contract_start_date else ""
+        edate = emp.contract_end_date.strftime("%Y-%m-%d") if emp.contract_end_date else ("TETAP" if "PKWTT" in (emp.contract_status or "").upper() else "")
+        xdate = emp.exit_date.strftime("%Y-%m-%d") if emp.exit_date else ""
+
+        row_values = [
+            row_idx - 1,
+            str(emp.employee_id or ""),
+            str(emp.payroll_id or ""),
+            str(emp.full_name or ""),
+            str(emp.nik or ""),
+            str(emp.gender or ""),
+            str(emp.birth_place or ""),
+            bdate,
+            emp.age if emp.age is not None else "",
+            str(emp.religion or ""),
+            str(emp.marriage_status or ""),
+            str(emp.ptkp_status or ""),
+            str(emp.phone or ""),
+            str(emp.email or ""),
+            str(emp.address_ktp or emp.street_ktp or ""),
+            str(emp.rt_ktp or ""),
+            str(emp.rw_ktp or ""),
+            str(emp.village_ktp or ""),
+            str(emp.district_ktp or ""),
+            str(emp.city_ktp or ""),
+            str(emp.province_ktp or ""),
+            str(emp.address_domicile or emp.street_domicile or ""),
+            str(emp.last_education or ""),
+            str(emp.school_name or ""),
+            str(emp.major or ""),
+            str(emp.department or ""),
+            str(emp.section or ""),
+            str(emp.job_title or ""),
+            str(emp.level or ""),
+            str(emp.plant or ""),
+            str(emp.employee_type or ""),
+            str(emp.contract_status or ""),
+            sdate,
+            edate,
+            str(emp.salary or ""),
+            str(emp.npwp or ""),
+            str(emp.bpjs_tk_no or ""),
+            "Aktif" if emp.employee_status == "active" else "Resign / Nonaktif",
+            xdate,
+            str(emp.exit_reason or ""),
+            str(emp.notes or ""),
+        ]
+
+        ws.row_dimensions[row_idx].height = 20
+        use_alt = (row_idx % 2 == 1)
+        for col_idx, val in enumerate(row_values, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+            cell.font = Font(name="Calibri", size=10)
+            cell.border = cell_border
+            if use_alt:
+                cell.fill = alt_fill
+
+            # Ensure ID, NIK, Phone, NPWP, BPJS are stored as text format
+            if col_idx in (2, 3, 5, 13, 16, 17, 36, 37):
+                cell.number_format = "@"
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif col_idx in (1, 9):
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif col_idx in (8, 33, 34, 39):
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    # Auto fit column widths
+    for col in ws.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            val_str = str(cell.value or "")
+            if len(val_str) > max_len:
+                max_len = len(val_str)
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+    ws.freeze_panes = "A2"
+
+    stream = io.BytesIO()
+    wb.save(stream)
+    stream.seek(0)
+
+    cur_date = datetime.now().strftime("%Y%m%d")
+    filename = f"DATA_MASTER_KARYAWAN_PT_ITSP_{cur_date}.xlsx"
+    return Response(
+        content=stream.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+        },
     )
 
 
