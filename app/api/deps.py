@@ -188,7 +188,8 @@ class RoleChecker:
         self.allowed_roles = [r.lower() for r in allowed_roles]
 
     def __call__(self, current_admin: RecruitmentAdmin = Depends(get_current_admin)) -> RecruitmentAdmin:
-        if current_admin.role.lower() not in self.allowed_roles and current_admin.role.lower() != "admin":
+        admin_role = (current_admin.role or "").lower()
+        if admin_role not in self.allowed_roles and admin_role not in ("admin", "superadmin"):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Akses Ditolak: Anda tidak memiliki izin untuk fitur ini. Wewenang dibutuhkan: {self.allowed_roles}",
