@@ -84,7 +84,7 @@ class AdminBase(BaseModel):
 
 class AdminCreate(AdminBase):
     # password optional — jika kosong, CRUD generates secure random temp password
-    password: Optional[str] = Field(None, min_length=6)
+    password: Optional[str] = Field(None, min_length=12)
 
 
 class AdminUpdate(BaseModel):
@@ -93,7 +93,7 @@ class AdminUpdate(BaseModel):
     email: Optional[EmailStr] = None
     role: Optional[str] = None
     department: Optional[str] = None
-    password: Optional[str] = Field(None, min_length=6)
+    password: Optional[str] = Field(None, min_length=12)
     is_active: Optional[bool] = None
     portal_access: Optional[str] = None
     is_first_login: Optional[bool] = None
