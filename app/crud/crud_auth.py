@@ -2,7 +2,7 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 from app.crud.base import CRUDBase
 from app.models.auth import RecruitmentAdmin, User
-from app.schemas.auth import AdminCreate, AdminUpdate, get_default_password
+from app.schemas.auth import AdminCreate, AdminUpdate, generate_temp_password
 from app.core.security import get_password_hash, verify_password
 
 
@@ -23,10 +23,12 @@ class CRUDAdmin(CRUDBase[RecruitmentAdmin, AdminCreate, AdminUpdate]):
 
     def create(self, db: Session, *, obj_in: AdminCreate) -> RecruitmentAdmin:
         data = obj_in.model_dump()
-        # Dynamic default password Itsp@YYYY if empty
+        # Generate secure random password if not provided
         raw_pwd = data.get("password")
+        generated_pwd = None
         if not raw_pwd:
-            raw_pwd = get_default_password()
+            raw_pwd = generate_temp_password()
+            generated_pwd = raw_pwd
             data["is_first_login"] = True
         else:
             # If caller explicitly provides password, keep is_first_login as payload (default True) but allow False
@@ -38,7 +40,10 @@ class CRUDAdmin(CRUDBase[RecruitmentAdmin, AdminCreate, AdminUpdate]):
             data["employee_id"] = str(data["employee_id"]).strip()
             if not data["employee_id"]:
                 data["employee_id"] = None
-        return super().create(db, obj_in=data)
+        db_obj = super().create(db, obj_in=data)
+        # Attach generated password as transient attribute (not persisted)
+        db_obj._temp_password = generated_pwd
+        return db_obj
 
     def update(self, db: Session, *, db_obj: RecruitmentAdmin, obj_in: Any) -> RecruitmentAdmin:
         if isinstance(obj_in, dict):
@@ -60,13 +65,15 @@ class CRUDAdmin(CRUDBase[RecruitmentAdmin, AdminCreate, AdminUpdate]):
         return super().update(db, db_obj=db_obj, obj_in=update_data)
 
     def reset_to_default_password(self, db: Session, *, db_obj: RecruitmentAdmin) -> RecruitmentAdmin:
-        """Reset password to Itsp@YYYY and force is_first_login."""
-        new_pwd = get_default_password()
+        """Reset password to a secure random one-time value and force is_first_login."""
+        new_pwd = generate_temp_password()
         db_obj.password = get_password_hash(new_pwd)
         db_obj.is_first_login = True
         db.add(db_obj)
         db.commit()
         db.refresh(db_obj)
+        # Attach generated password as transient attribute (not persisted)
+        db_obj._temp_password = new_pwd
         return db_obj
 
     def authenticate(self, db: Session, *, username_or_email: str, password: str) -> Optional[RecruitmentAdmin]:
@@ -134,10 +141,12 @@ class CRUDUser(CRUDBase[User, Any, Any]):
         return None
 
     def create_with_default_pwd(self, db: Session, *, obj_in: Any) -> User:
-        from app.schemas.auth import get_default_password
+        from app.schemas.auth import generate_temp_password
         data = obj_in if isinstance(obj_in, dict) else obj_in.model_dump()
+        generated_pwd = None
         if not data.get("password"):
-            data["password"] = get_password_hash(get_default_password())
+            generated_pwd = generate_temp_password()
+            data["password"] = get_password_hash(generated_pwd)
             data["is_first_login"] = True
         else:
             data["password"] = get_password_hash(data["password"])
@@ -152,15 +161,20 @@ class CRUDUser(CRUDBase[User, Any, Any]):
         db.add(db_obj)
         db.commit()
         db.refresh(db_obj)
+        # Attach generated password as transient attribute (not persisted)
+        db_obj._temp_password = generated_pwd
         return db_obj
 
     def reset_to_default_password(self, db: Session, *, db_obj: User) -> User:
-        from app.schemas.auth import get_default_password
-        db_obj.password = get_password_hash(get_default_password())
+        from app.schemas.auth import generate_temp_password
+        new_pwd = generate_temp_password()
+        db_obj.password = get_password_hash(new_pwd)
         db_obj.is_first_login = True
         db.add(db_obj)
         db.commit()
         db.refresh(db_obj)
+        # Attach generated password as transient attribute (not persisted)
+        db_obj._temp_password = new_pwd
         return db_obj
 
 

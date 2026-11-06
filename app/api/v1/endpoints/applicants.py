@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -29,7 +30,7 @@ def apply_job(
     - Checks job status, opening date, and closing date
     - Handles re-apply cleanup if candidate previously failed or expired > 30 days ago
     - Calculates candidate age from birth_date
-    - Auto-generates standard temp password (e.g. Itsp@2026)
+    - Auto-generates secure random temp password per applicant
     - Persists candidate and returns applicant data + temp password for email delivery
     """
     job_id = int(payload.get("job_posting_id") or payload.get("jobPostingId") or 0)
@@ -174,9 +175,8 @@ def apply_job(
     if age <= 0:
         age = 20
 
-    # 5. Generate password & hash
-    year = today.year
-    temp_password = f"Itsp@{year}"
+    # 5. Generate password & hash — secure random per applicant
+    temp_password = secrets.token_urlsafe(12)
     hashed_pw = get_password_hash(temp_password)
 
     # 6. Create applicant

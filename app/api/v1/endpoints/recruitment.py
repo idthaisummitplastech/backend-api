@@ -457,9 +457,17 @@ def create_recruitment_admin(
         eid = str(payload.employee_id).strip()
         if eid and crud_admin.get_by_employee_id(db, eid):
             raise HTTPException(status_code=400, detail=f"Employee ID {eid} sudah digunakan.")
-    # allow empty password -> CRUD will hash the initial password automatically
+    # allow empty password -> CRUD will generate secure random temp password
     new_admin = crud_admin.create(db, obj_in=payload)
-    return ApiResponse(data=AdminResponse.model_validate(new_admin), message="Akun admin rekrutmen berhasil dibuat. Kredensial awal wajib diganti pada saat login pertama.")
+    response_data = {
+        "data": AdminResponse.model_validate(new_admin),
+        "message": "Akun admin rekrutmen berhasil dibuat. Kredensial awal wajib diganti pada saat login pertama.",
+    }
+    # Return one-time temp password to the creating admin (not logged, not stored)
+    temp_pwd = getattr(new_admin, "_temp_password", None)
+    if temp_pwd:
+        response_data["temp_password"] = temp_pwd
+    return response_data
 
 
 @router.put("/admins/{id}", response_model=ApiResponse[AdminResponse])
@@ -502,18 +510,24 @@ def delete_recruitment_admin(
     return StatusResponse(message="Akun admin berhasil dihapus.")
 
 
-@router.post("/admins/{id}/reset-password", response_model=StatusResponse)
+@router.post("/admins/{id}/reset-password")
 def reset_recruitment_admin_password(
     id: int,
     db: Session = Depends(get_db),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["admin"])),
 ):
-    """Reset password admin ke password awal — hash only on reset, is_first_login=true."""
+    """Reset password admin ke password acak sekali pakai — is_first_login=true."""
     admin = crud_admin.get(db, id)
     if not admin:
         raise HTTPException(status_code=404, detail="Admin tidak ditemukan.")
     crud_admin.reset_to_default_password(db, db_obj=admin)
-    return StatusResponse(message="Kata sandi admin berhasil direset. Pengguna wajib memperbarui kata sandi saat login berikutnya.")
+    temp_pwd = getattr(admin, "_temp_password", None)
+    response = {
+        "message": "Kata sandi admin berhasil direset. Pengguna wajib memperbarui kata sandi saat login berikutnya.",
+    }
+    if temp_pwd:
+        response["temp_password"] = temp_pwd
+    return response
 
 
 @router.get("/karyawan-sementara", response_model=ApiResponse[List[KaryawanSementaraResponse]])
