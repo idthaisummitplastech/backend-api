@@ -71,6 +71,22 @@ def get_current_admin(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Dependency guard: tolak token ber-scope terbatas di luar alur ganti password dan setup MFA
+    if payload.get("scope") == "first_login_setup":
+        path = request.url.path if request else ""
+        allowed_setup_prefixes = (
+            "/api/v1/auth/mfa",
+            "/api/v1/auth/cms-mfa",
+            "/api/v1/auth/ats-mfa",
+            "/api/v1/cms/profile",
+            "/api/v1/auth/me/admin",
+        )
+        if not any(path.startswith(prefix) for prefix in allowed_setup_prefixes):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Wajib mengganti kata sandi dan mengaktifkan MFA sebelum mengakses sistem",
+            )
+
     sub_val = payload["sub"]
     admin_id = None
     if isinstance(sub_val, int):

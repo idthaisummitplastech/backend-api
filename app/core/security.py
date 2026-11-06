@@ -34,6 +34,7 @@ def create_access_token(
     department: Optional[str] = None,
     expires_delta: Optional[timedelta] = None,
     extra_claims: Optional[Dict[str, Any]] = None,
+    scope: Optional[str] = None,
 ) -> str:
     """Generate cryptographically signed JWT access token with expiration and roles."""
     now = datetime.now(timezone.utc)
@@ -43,6 +44,8 @@ def create_access_token(
         expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
     claims = extra_claims.copy() if extra_claims else {}
+    if scope:
+        claims["scope"] = scope
     sub_val = subject
     if isinstance(subject, dict):
         sub_val = subject.get("sub") or subject.get("id") or subject.get("email")

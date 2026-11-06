@@ -81,11 +81,17 @@ def login_cms_user(
     if pa not in ("perusahaan", "both"):
         raise HTTPException(status_code=403, detail="Your account does not have access to the Company Website. Please ask admin to set portal_access to Company or Both.")
 
+    is_first = bool(getattr(user, "is_first_login", False))
+    admin_roles = ["admin", "hr", "user_dept", "marketing"]
+    mfa_pending = (user.role in admin_roles and not user.mfa_enabled)
+    token_scope = "first_login_setup" if (is_first or mfa_pending) else None
+
     token = create_access_token(
         subject=str(user.id),
         role=user.role,
         department=getattr(user, "department", None),
-        extra_claims={"email": user.email, "name": user.name, "employee_id": getattr(user, "employee_id", None)}
+        extra_claims={"email": user.email, "name": user.name, "employee_id": getattr(user, "employee_id", None)},
+        scope=token_scope,
     )
     has_secret = bool(user.mfa_secret)
     return {
@@ -330,11 +336,17 @@ def login_ats_admin(
             admin_role = cms_user.role
             admin_dept = (ats_admin.department if ats_admin else None) or dept_name
 
+            is_first = bool(getattr(cms_user, "is_first_login", False) or (ats_admin and getattr(ats_admin, "is_first_login", False)))
+            admin_roles = ["admin", "hr", "user_dept", "marketing"]
+            mfa_pending = (admin_role in admin_roles and not cms_user.mfa_enabled)
+            token_scope = "first_login_setup" if (is_first or mfa_pending) else None
+
             token = create_access_token(
                 subject=str(admin_id),
                 role=admin_role,
                 department=admin_dept,
-                extra_claims={"email": cms_user.email, "name": admin_name}
+                extra_claims={"email": cms_user.email, "name": admin_name},
+                scope=token_scope,
             )
 
             return {
@@ -349,6 +361,7 @@ def login_ats_admin(
                     "role": admin_role,
                     "department": admin_dept,
                     "is_mfa_enabled": True,
+                    "is_first_login": is_first,
                 },
             }
 
@@ -438,11 +451,17 @@ def login_ats_admin(
                     detail="Kode MFA 6-digit tidak valid atau sudah kedaluwarsa.",
                 )
 
+        is_first = bool(getattr(local_admin, "is_first_login", False))
+        admin_roles = ["admin", "hr", "user_dept", "marketing"]
+        mfa_pending = (local_admin.role in admin_roles and not local_admin.is_mfa_enabled)
+        token_scope = "first_login_setup" if (is_first or mfa_pending) else None
+
         token = create_access_token(
             subject=str(local_admin.id),
             role=local_admin.role,
             department=local_admin.department,
-            extra_claims={"email": local_admin.email, "name": local_admin.name}
+            extra_claims={"email": local_admin.email, "name": local_admin.name},
+            scope=token_scope,
         )
 
         return {
@@ -457,6 +476,7 @@ def login_ats_admin(
                 "role": local_admin.role,
                 "department": local_admin.department,
                 "is_mfa_enabled": True,
+                "is_first_login": is_first,
             },
         }
 
@@ -766,6 +786,20 @@ def verify_ats_admin_mfa(
             "message": "Autentikasi 2 Langkah (Google Authenticator) berhasil diaktifkan untuk akun Anda!",
         }
     else:
+        admin_roles = ["admin", "hr", "user_dept", "marketing"]
+        if admin.role in admin_roles:
+            raise HTTPException(
+                status_code=400,
+                detail="MFA wajib aktif untuk akun administrator dan tidak dapat dinonaktifkan.",
+            )
+
+        if not admin.mfa_secret:
+            raise HTTPException(status_code=400, detail="MFA belum diaktifkan.")
+
+        totp = pyotp.TOTP(admin.mfa_secret)
+        if not totp.verify(code, valid_window=30):
+            raise HTTPException(status_code=400, detail="Kode verifikasi 6-digit tidak valid atau sudah kedaluwarsa.")
+
         admin.is_mfa_enabled = False
         db.commit()
 

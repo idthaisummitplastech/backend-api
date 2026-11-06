@@ -24,7 +24,7 @@ from app.schemas.cms import ContactSubmissionCreate, ContactSubmissionResponse
 from app.schemas.common import ApiResponse, StatusResponse
 from app.api.deps import get_current_admin, RoleChecker
 from app.core.middleware import limiter
-from app.core.security import get_password_hash, verify_password
+from app.core.security import get_password_hash, verify_password, create_access_token, verify_totp
 
 router = APIRouter()
 
@@ -233,19 +233,53 @@ def update_cms_profile(
 
         hashed = get_password_hash(new_password)
         user.password = hashed
+        user.is_first_login = False
         db.commit()
 
         # Sync to recruitment_admins if exists
         rec_admin = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email == user.email).first()
         if rec_admin:
             rec_admin.password = hashed
+            rec_admin.is_first_login = False
             karir_db.commit()
 
-        return ApiResponse(message="Kata sandi berhasil diubah.")
+        # Terbitkan token penuh baru jika MFA sudah aktif
+        new_token = None
+        if user.mfa_enabled:
+            new_token = create_access_token(
+                subject=str(user.id),
+                role=user.role,
+                department=getattr(user, "department", None),
+                extra_claims={"email": user.email, "name": user.name, "employee_id": getattr(user, "employee_id", None)},
+            )
+
+        resp_data = {"token": new_token} if new_token else None
+        return ApiResponse(data=resp_data, message="Kata sandi berhasil diubah.")
 
     elif action == "toggle_mfa":
         enabled = payload.get("enabled")
         new_status = bool(enabled) if enabled is not None else not user.mfa_enabled
+        admin_roles = ["admin", "hr", "user_dept", "marketing"]
+
+        # Admin, HR, User Dept, Marketing wajib MFA — tidak boleh dinonaktifkan
+        if not new_status and user.role in admin_roles:
+            raise HTTPException(
+                status_code=400,
+                detail="MFA wajib aktif untuk akun administrator dan tidak dapat dinonaktifkan.",
+            )
+
+        # Mematikan MFA untuk akun lain wajib memverifikasi password atau kode TOTP
+        if not new_status and user.mfa_enabled:
+            current_pw = str(payload.get("current_password") or payload.get("currentPassword", "")).strip()
+            totp_code = str(payload.get("code") or payload.get("totp_code", "")).strip()
+            pw_ok = current_pw and verify_password(current_pw, user.password)
+            totp_ok = totp_code and user.mfa_secret and verify_totp(user.mfa_secret, totp_code)
+            if not (pw_ok or totp_ok):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Mematikan MFA memerlukan verifikasi kata sandi atau kode TOTP yang valid.",
+                )
+
         user.mfa_enabled = new_status
         if payload.get("mfa_secret") or payload.get("mfaSecret"):
             user.mfa_secret = payload.get("mfa_secret") or payload.get("mfaSecret")
@@ -253,7 +287,29 @@ def update_cms_profile(
             bc = payload.get("backup_codes") or payload.get("backupCodes")
             user.backup_codes = bc if isinstance(bc, str) else json.dumps(bc)
         db.commit()
-        return ApiResponse(data={"mfa_enabled": new_status}, message="Status MFA berhasil diperbarui.")
+
+        # Sync to recruitment_admins if exists
+        rec_admin = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email == user.email).first()
+        if rec_admin:
+            rec_admin.is_mfa_enabled = new_status
+            if user.mfa_secret:
+                rec_admin.mfa_secret = user.mfa_secret
+            karir_db.commit()
+
+        # Terbitkan token penuh baru jika MFA baru saja diaktifkan dan password sudah diganti
+        new_token = None
+        if new_status and not getattr(user, "is_first_login", False):
+            new_token = create_access_token(
+                subject=str(user.id),
+                role=user.role,
+                department=getattr(user, "department", None),
+                extra_claims={"email": user.email, "name": user.name, "employee_id": getattr(user, "employee_id", None)},
+            )
+
+        return ApiResponse(
+            data={"mfa_enabled": new_status, "token": new_token},
+            message="Status MFA berhasil diperbarui.",
+        )
 
     raise HTTPException(status_code=400, detail="Aksi tidak valid.")
 
