@@ -228,8 +228,8 @@ def update_cms_profile(
             raise HTTPException(status_code=400, detail="Kata sandi saat ini dan baru wajib diisi.")
         if not verify_password(current_password, user.password):
             raise HTTPException(status_code=400, detail="Kata sandi saat ini tidak sesuai.")
-        if len(new_password) < 6:
-            raise HTTPException(status_code=400, detail="Kata sandi baru minimal 6 karakter.")
+        if len(new_password) < 12:
+            raise HTTPException(status_code=400, detail="Kata sandi baru minimal 12 karakter.")
 
         hashed = get_password_hash(new_password)
         user.password = hashed

@@ -235,6 +235,8 @@ def reset_applicant_password(
     if target_type == "admin":
         if not target_id:
             raise HTTPException(status_code=400, detail="ID Pengguna Staf/Admin wajib diisi.")
+        if len(new_password) < 12:
+            raise HTTPException(status_code=400, detail="Password akun staf/admin minimal 12 karakter.")
 
         hashed = get_password_hash(new_password)
         target_email = None
@@ -444,7 +446,7 @@ def create_recruitment_admin(
     db: Session = Depends(get_db),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["admin"])),
 ):
-    """Create recruitment ATS admin user — Employee ID immutable, password default Itsp@YYYY."""
+    """Create recruitment ATS admin user — Employee ID immutable, is_first_login=true."""
     existing = crud_admin.get_by_username(db, payload.username)
     if existing:
         raise HTTPException(status_code=400, detail="Username sudah digunakan.")
@@ -455,9 +457,9 @@ def create_recruitment_admin(
         eid = str(payload.employee_id).strip()
         if eid and crud_admin.get_by_employee_id(db, eid):
             raise HTTPException(status_code=400, detail=f"Employee ID {eid} sudah digunakan.")
-    # allow empty password -> CRUD will hash Itsp@YYYY automatically
+    # allow empty password -> CRUD will hash the initial password automatically
     new_admin = crud_admin.create(db, obj_in=payload)
-    return ApiResponse(data=AdminResponse.model_validate(new_admin), message=f"Akun admin rekrutmen berhasil dibuat. Password default: Itsp@{__import__('datetime').datetime.now(__import__('datetime').timezone.utc).year} (wajib ganti saat login pertama).")
+    return ApiResponse(data=AdminResponse.model_validate(new_admin), message="Akun admin rekrutmen berhasil dibuat. Kredensial awal wajib diganti pada saat login pertama.")
 
 
 @router.put("/admins/{id}", response_model=ApiResponse[AdminResponse])
@@ -506,13 +508,12 @@ def reset_recruitment_admin_password(
     db: Session = Depends(get_db),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["admin"])),
 ):
-    """Reset password admin ke Itsp@YYYY (tahun berjalan) — hash only on reset, is_first_login=true."""
+    """Reset password admin ke password awal — hash only on reset, is_first_login=true."""
     admin = crud_admin.get(db, id)
     if not admin:
         raise HTTPException(status_code=404, detail="Admin tidak ditemukan.")
-    from app.schemas.auth import get_default_password
     crud_admin.reset_to_default_password(db, db_obj=admin)
-    return StatusResponse(message=f"Password {admin.employee_id or admin.username} direset ke {get_default_password()} — wajib ganti saat login.")
+    return StatusResponse(message="Kata sandi admin berhasil direset. Pengguna wajib memperbarui kata sandi saat login berikutnya.")
 
 
 @router.get("/karyawan-sementara", response_model=ApiResponse[List[KaryawanSementaraResponse]])
