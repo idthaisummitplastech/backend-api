@@ -314,6 +314,50 @@ def update_cms_profile(
     raise HTTPException(status_code=400, detail="Aksi tidak valid.")
 
 
+
+# Kolom rahasia yang DILARANG KERAS dikembalikan oleh serializer publik / dinamis
+SENSITIVE_MODEL_COLUMNS: Dict[str, Any] = {
+    "users": {"password", "mfa_secret", "backup_codes"},
+}
+
+
+def serialize_cms_record(
+    model: str,
+    item: Any,
+    rec_admin_map: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Serialisasi entitas ORM menjadi dictionary dengan blacklist ketat kolom rahasia.
+    Memastikan kredensial seperti hash password, mfa_secret, dan backup_codes
+    tidak pernah bocor pada respons GET list maupun GET single item.
+    """
+    sensitive_cols = SENSITIVE_MODEL_COLUMNS.get(model.lower(), set())
+    d = {
+        c.name: getattr(item, c.name)
+        for c in item.__table__.columns
+        if c.name not in sensitive_cols
+    }
+
+    if model.lower() == "users":
+        em = (d.get("email") or "").lower()
+        ra = (rec_admin_map or {}).get(em) if rec_admin_map else None
+        dept_default = {
+            "hr": "Human Capital",
+            "user_dept": "Engineering",
+            "admin": "IT & Systems",
+            "marketing": "Marketing",
+        }.get(d.get("role"), "General Management")
+        d["username"] = getattr(item, "username", None) or (ra.username if (ra and ra.username) else None) or em.split("@")[0]
+        d["department"] = getattr(item, "department", None) or (ra.department if (ra and ra.department) else None) or dept_default
+        d["is_mfa_enabled"] = bool(d.get("mfa_enabled") or (ra and ra.is_mfa_enabled))
+        d["isMfaEnabled"] = d["is_mfa_enabled"]
+        d["is_active"] = bool(d.get("is_active", True) if d.get("is_active") is not None else True)
+        d["portal_access"] = (d.get("portal_access") or (getattr(ra, "portal_access", None) if ra else None) or "both")
+        d["portalAccess"] = d["portal_access"]
+        d["isActive"] = d["is_active"]
+
+    return d
+
 # --- DYNAMIC CMS CRUD FOR WEB PERUSAHAAN ---
 @router.get("/{model}")
 def get_cms_items(
@@ -468,34 +512,7 @@ def get_cms_items(
         except Exception:
             pass
 
-    results = []
-    for item in items:
-        d = {c.name: getattr(item, c.name) for c in item.__table__.columns}
-        if model == "users":
-            if "password" in d:
-                d["password"] = "******"
-            em = (d.get("email") or "").lower()
-            ra = rec_admin_map.get(em)
-            dept_default = {
-                "hr": "Human Capital",
-                "user_dept": "Engineering",
-                "admin": "IT & Systems",
-                "marketing": "Marketing",
-            }.get(d.get("role"), "General Management")
-            d["username"] = getattr(item, "username", None) or (ra.username if (ra and ra.username) else None) or em.split("@")[0]
-            d["department"] = getattr(item, "department", None) or (ra.department if (ra and ra.department) else None) or dept_default
-            d["is_mfa_enabled"] = bool(d.get("mfa_enabled") or (ra and ra.is_mfa_enabled))
-            d["isMfaEnabled"] = d["is_mfa_enabled"]
-            # expose is_active & portal_access with fallback
-            d["is_active"] = bool(d.get("is_active", True) if d.get("is_active") is not None else True)
-            if ra and hasattr(ra, "is_active"):
-                # prefer DB truth (already synced)
-                pass
-            d["portal_access"] = (d.get("portal_access") or (getattr(ra, "portal_access", None) if ra else None) or "both")
-            d["portalAccess"] = d["portal_access"]
-            d["isActive"] = d["is_active"]
-        results.append(d)
-
+    results = [serialize_cms_record(model, item, rec_admin_map) for item in items]
     return ApiResponse(data=results)
 
 
@@ -504,6 +521,7 @@ def get_cms_item_by_id(
     model: str,
     id: int,
     db: Session = Depends(get_db),
+    karir_db: Session = Depends(get_karir_db),
 ):
     """Retrieve single CMS record by ID."""
     crud = CMSModelRegistry.get_crud(model)
@@ -514,7 +532,14 @@ def get_cms_item_by_id(
     if not item:
         raise HTTPException(status_code=404, detail=f"Data {model} dengan ID {id} tidak ditemukan.")
 
-    item_dict = {c.name: getattr(item, c.name) for c in item.__table__.columns}
+    rec_admin_map = {}
+    if model.lower() == "users":
+        try:
+            rec_admin_map = {ra.email.lower(): ra for ra in karir_db.query(RecruitmentAdmin).all() if ra.email}
+        except Exception:
+            pass
+
+    item_dict = serialize_cms_record(model, item, rec_admin_map)
     return ApiResponse(data=item_dict)
 
 
