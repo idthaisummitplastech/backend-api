@@ -9,8 +9,11 @@ from app.api.v1.endpoints.cms import (
     serialize_cms_record,
     SENSITIVE_MODEL_COLUMNS,
     check_cms_model_access,
+    check_cms_write_access,
     PUBLIC_GET_MODELS,
+    CMS_CONTENT_MODELS,
     SENSITIVE_GET_MODELS,
+    SENSITIVE_MODELS,
 )
 
 
@@ -129,17 +132,145 @@ def test_sensitive_contacts_requires_auth():
     assert exc.value.status_code == 401
 
 
-def test_sensitive_contacts_allows_internal_secret():
-    """Verify 'contacts' model allows request with valid X-Internal-Secret."""
+def test_sensitive_contacts_allows_internal_secret_with_admin_role():
+    """Verify 'contacts' model allows request with valid X-Internal-Secret and X-Admin-Role."""
     mock_request = MagicMock()
-    mock_request.headers.get.side_effect = lambda h: settings.SECRET_KEY if h.lower() == "x-internal-secret" else None
+    headers_map = {
+        "x-internal-secret": settings.SECRET_KEY,
+        "x-admin-role": "admin",
+    }
+    mock_request.headers.get.side_effect = lambda h: headers_map.get(h.lower())
     mock_db = MagicMock()
-    fake_admin = RecruitmentAdmin(id=1, username="admin", role="admin", email="admin@itsp.co.id")
-    mock_db.query().filter().first.return_value = fake_admin
 
     admin = check_cms_model_access("contacts", request=mock_request, db=mock_db, credentials=None)
     assert admin is not None
     assert admin.role == "admin"
+
+
+def test_internal_secret_without_role_rejected_with_403():
+    """Verify X-Internal-Secret without X-Admin-Role and without X-Admin-Id is rejected with 403."""
+    mock_request = MagicMock()
+    mock_request.headers.get.side_effect = lambda h: settings.SECRET_KEY if h.lower() == "x-internal-secret" else None
+    mock_db = MagicMock()
+
+    with pytest.raises(HTTPException) as exc:
+        check_cms_model_access("contacts", request=mock_request, db=mock_db, credentials=None)
+    assert exc.value.status_code == 403
+    assert "memerlukan header X-Admin-Role atau X-Admin-Id" in exc.value.detail
+
+
+def test_internal_secret_with_mismatched_admin_id_and_role_rejected():
+    """Verify X-Internal-Secret with mismatched X-Admin-Id and X-Admin-Role is rejected with 403."""
+    from app.api.deps import get_current_admin
+    from app.crud.crud_auth import crud_admin
+
+    mock_request = MagicMock()
+    headers_map = {
+        "x-internal-secret": settings.SECRET_KEY,
+        "x-admin-id": "5",
+        "x-admin-role": "admin",
+    }
+    mock_request.headers.get.side_effect = lambda h: headers_map.get(h.lower())
+    mock_db = MagicMock()
+
+    # Case 1: ID not found in database -> 403
+    orig_get = crud_admin.get
+    try:
+        crud_admin.get = MagicMock(return_value=None)
+        with pytest.raises(HTTPException) as exc1:
+            get_current_admin(request=mock_request, credentials=None, db=mock_db)
+        assert exc1.value.status_code == 403
+        assert "Akun admin tidak ditemukan" in exc1.value.detail
+
+        # Case 2: ID found as 'hr', but X-Admin-Role header claims 'admin' -> 403
+        fake_hr = RecruitmentAdmin(id=5, username="hrstaff", role="hr", email="hr@itsp.co.id")
+        crud_admin.get = MagicMock(return_value=fake_hr)
+        with pytest.raises(HTTPException) as exc2:
+            get_current_admin(request=mock_request, credentials=None, db=mock_db)
+        assert exc2.value.status_code == 403
+        assert "Header role tidak sesuai" in exc2.value.detail
+    finally:
+        crud_admin.get = orig_get
+
+
+def test_marketing_role_write_permissions():
+    """Verify marketing role can write content models, but is rejected for sensitive models."""
+    marketing_admin = RecruitmentAdmin(id=10, username="mkt", role="marketing", email="mkt@itsp.co.id")
+    super_admin = RecruitmentAdmin(id=1, username="admin", role="admin", email="admin@itsp.co.id")
+
+    # 1. Content models: allowed for marketing and admin
+    for content_model in ["hero-sections", "services", "announcements", "settings", "pages"]:
+        check_cms_write_access(content_model, marketing_admin)  # should not raise
+        check_cms_write_access(content_model, super_admin)       # should not raise
+
+    # 2. Sensitive models: rejected with 403 for marketing, allowed for admin
+    for sensitive_model in ["users", "contacts", "admin-menus"]:
+        with pytest.raises(HTTPException) as exc:
+            check_cms_write_access(sensitive_model, marketing_admin)
+        assert exc.value.status_code == 403
+        assert "hanya dapat dikelola oleh Administrator" in exc.value.detail
+
+        # Admin must be allowed
+        check_cms_write_access(sensitive_model, super_admin)
+
+
+def test_user_password_length_and_hash_rejection():
+    """Verify password < 12 characters or raw bcrypt hashes are rejected on user CRUD."""
+    from app.api.v1.endpoints.cms import create_cms_item, update_cms_item
+
+    mock_db = MagicMock()
+    mock_karir_db = MagicMock()
+    admin_user = RecruitmentAdmin(id=1, username="admin", role="admin", email="admin@itsp.co.id")
+
+    # 1. Test short password (< 12 chars) on create
+    with pytest.raises(HTTPException) as exc_short:
+        create_cms_item(
+            model="users",
+            payload={"name": "Test", "email": "test@itsp.co.id", "password": "short_pw"},
+            db=mock_db,
+            karir_db=mock_karir_db,
+            current_admin=admin_user,
+        )
+    assert exc_short.value.status_code == 400
+    assert "minimal terdiri dari 12 karakter" in exc_short.value.detail
+
+    # 2. Test raw bcrypt hash on create
+    with pytest.raises(HTTPException) as exc_hash:
+        create_cms_item(
+            model="users",
+            payload={"name": "Test", "email": "test@itsp.co.id", "password": "$2b$12$e8r6...rawhash"},
+            db=mock_db,
+            karir_db=mock_karir_db,
+            current_admin=admin_user,
+        )
+    assert exc_hash.value.status_code == 400
+    assert "hash password tidak diperkenankan" in exc_hash.value.detail
+
+
+def test_content_models_parity_with_nextjs_whitelist():
+    """Verify backend CMS_CONTENT_MODELS matches the 16 content models defined in Next.js cms-guard."""
+    expected_content_models = {
+        "settings",
+        "nav-menus",
+        "hero-sections",
+        "announcements",
+        "partners",
+        "features",
+        "services",
+        "products",
+        "blog-posts",
+        "testimonials",
+        "faqs",
+        "statistics",
+        "certifications",
+        "facilities",
+        "sustainability-reports",
+        "pages",
+    }
+    assert CMS_CONTENT_MODELS == expected_content_models
+    assert len(CMS_CONTENT_MODELS) == 16
+    assert SENSITIVE_MODELS == {"users", "contacts", "admin-menus"}
+    assert len(SENSITIVE_MODELS) == 3
 
 
 def test_sensitive_admin_menus_allows_jwt():

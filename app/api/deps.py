@@ -30,31 +30,34 @@ def get_current_admin(
 
         if admin_id_hdr:
             try:
-                admin_found = crud_admin.get(db, int(admin_id_hdr))
-                if admin_found:
-                    # hormati is_active jika ada
-                    if hasattr(admin_found, "is_active") and getattr(admin_found, "is_active") is False:
-                        raise HTTPException(status_code=403, detail="Account deactivated.")
-                    return admin_found
+                admin_id_val = int(admin_id_hdr)
             except (ValueError, TypeError):
-                pass
-            except HTTPException:
-                raise
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Header X-Admin-Id tidak valid.")
+
+            admin_found = crud_admin.get(db, admin_id_val)
+            if not admin_found:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun admin tidak ditemukan.")
+            if hasattr(admin_found, "is_active") and getattr(admin_found, "is_active") is False:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun dinonaktifkan.")
+            if admin_role_hdr and admin_role_hdr.lower() != (admin_found.role or "").lower():
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Header role tidak sesuai dengan data akun.")
+            return admin_found
 
         if admin_role_hdr:
             return RecruitmentAdmin(
-                id=int(admin_id_hdr) if admin_id_hdr and admin_id_hdr.isdigit() else 1,
+                id=0,
                 username="admin_internal",
                 name="Internal Service Admin",
                 role=admin_role_hdr.lower(),
                 department=admin_dept_hdr,
-                email="admin@itsp.co.id",
+                email="internal@system.local",
             )
 
-        admin = crud_admin.get_by_username(db, "admin")
-        if admin:
-            return admin
-        return RecruitmentAdmin(id=1, username="admin", name="Administrator", role="admin", email="admin@itsp.co.id")
+        # Tanpa X-Admin-Id dan tanpa X-Admin-Role: tolak 403 (hapus fallback superadmin)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Autentikasi internal memerlukan header X-Admin-Role atau X-Admin-Id.",
+        )
 
     if not credentials or not credentials.credentials:
         raise HTTPException(

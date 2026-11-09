@@ -56,7 +56,7 @@ def submit_contact_form(
 def reorder_nav_menus(
     payload: List[Dict[str, Any]],
     db: Session = Depends(get_db),
-    _admin=Depends(RoleChecker(["admin"])),
+    _admin=Depends(RoleChecker(["admin", "marketing"])),
 ):
     """Reorder navigation menu items."""
     for item in payload:
@@ -384,12 +384,62 @@ PUBLIC_GET_MODELS = {
     "settings",
 }
 
-# Model sensitif yang wajib diotentikasi (users, contacts, admin-menus)
-SENSITIVE_GET_MODELS = {
+# Model konten CMS yang dapat ditulis oleh peran admin dan marketing (16 model)
+CMS_CONTENT_MODELS = {
+    "settings",
+    "nav-menus",
+    "hero-sections",
+    "announcements",
+    "partners",
+    "features",
+    "services",
+    "products",
+    "blog-posts",
+    "testimonials",
+    "faqs",
+    "statistics",
+    "certifications",
+    "facilities",
+    "sustainability-reports",
+    "pages",
+}
+
+# Model sensitif yang wajib diotentikasi dan hanya boleh dikelola oleh peran admin
+SENSITIVE_MODELS = {
     "users",
     "contacts",
     "admin-menus",
 }
+SENSITIVE_GET_MODELS = SENSITIVE_MODELS
+
+
+def check_cms_write_access(model: str, admin: RecruitmentAdmin) -> None:
+    """
+    Validasi otorisasi tulis (POST/PUT/DELETE) model CMS:
+    - Model sensitif (users, contacts, admin-menus) HANYA untuk role 'admin' / 'superadmin'.
+    - Model konten (CMS_CONTENT_MODELS) diizinkan untuk role 'admin' dan 'marketing'.
+    - Model di luar registri ditolak (403) jika bukan admin.
+    """
+    m = model.lower()
+    role = (admin.role or "").lower()
+    if m in SENSITIVE_MODELS:
+        if role not in ("admin", "superadmin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Akses ditolak. Model '{model}' hanya dapat dikelola oleh Administrator.",
+            )
+    elif m in CMS_CONTENT_MODELS:
+        if role not in ("admin", "superadmin", "marketing"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Akses ditolak. Model '{model}' memerlukan wewenang admin atau marketing.",
+            )
+    else:
+        if role not in ("admin", "superadmin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Akses ditolak.",
+            )
 
 
 def check_cms_model_access(
@@ -408,9 +458,9 @@ def check_cms_model_access(
     if m in PUBLIC_GET_MODELS:
         return None
 
-    # Default-deny: wajib autentikasi (X-Internal-Secret atau JWT)
+    # Default-deny: wajib autentikasi (X-Internal-Secret dengan X-Admin-Role / X-Admin-Id atau Bearer JWT)
     admin = get_current_admin(request=request, credentials=credentials, db=db)
-    if m == "users" and admin.role != "admin":
+    if m == "users" and admin.role not in ("admin", "superadmin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Akses ditolak. Model 'users' hanya dapat diakses oleh peran admin.",
@@ -618,9 +668,10 @@ def create_cms_item(
     payload: Dict[str, Any],
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
-    _admin=Depends(RoleChecker(["admin"])),
+    current_admin: RecruitmentAdmin = Depends(get_current_admin),
 ):
-    """Create dynamic CMS record (Admin only)."""
+    """Create dynamic CMS record (Admin or Marketing depending on model)."""
+    check_cms_write_access(model, current_admin)
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
@@ -692,7 +743,22 @@ def create_cms_item(
         user_email = (normalized_data.get("email") or "").strip().lower()
         if not user_email:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email wajib diisi.")
-        
+
+        pwd = normalized_data.get("password")
+        if pwd is not None:
+            pwd_str = str(pwd).strip()
+            if pwd_str.startswith("$2b$") or pwd_str.startswith("$2a$"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Password harus berupa teks polos, hash password tidak diperkenankan.",
+                )
+            if len(pwd_str) < 12:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Kata sandi minimal terdiri dari 12 karakter.",
+                )
+            normalized_data["password"] = get_password_hash(pwd_str)
+
         # Check duplicate in Company Profile DB
         existing_user = db.query(User).filter(User.email.ilike(user_email)).first()
         if existing_user:
@@ -722,10 +788,6 @@ def create_cms_item(
         if pa not in ("perusahaan","karir","both"):
             pa = "both"
         normalized_data["portal_access"] = pa
-
-        pwd = normalized_data.get("password")
-        if pwd and not str(pwd).startswith("$2b$"):
-            normalized_data["password"] = get_password_hash(str(pwd))
         if "backup_codes" in normalized_data and not isinstance(normalized_data["backup_codes"], str):
             normalized_data["backup_codes"] = json.dumps(normalized_data["backup_codes"])
 
@@ -804,9 +866,10 @@ def update_cms_item(
     payload: Dict[str, Any],
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
-    _admin=Depends(RoleChecker(["admin"])),
+    current_admin: RecruitmentAdmin = Depends(get_current_admin),
 ):
-    """Update dynamic CMS record (Admin only)."""
+    """Update dynamic CMS record (Admin or Marketing depending on model)."""
+    check_cms_write_access(model, current_admin)
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
@@ -826,10 +889,18 @@ def update_cms_item(
         old_email = getattr(item, "email", None)
         pwd = normalized_data.get("password") or normalized_data.get("new_password")
         if pwd and str(pwd).strip():
-            if not str(pwd).startswith("$2b$"):
-                normalized_data["password"] = get_password_hash(str(pwd).strip())
-            else:
-                normalized_data["password"] = str(pwd).strip()
+            pwd_str = str(pwd).strip()
+            if pwd_str.startswith("$2b$") or pwd_str.startswith("$2a$"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Password harus berupa teks polos, hash password tidak diperkenankan.",
+                )
+            if len(pwd_str) < 12:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Kata sandi minimal terdiri dari 12 karakter.",
+                )
+            normalized_data["password"] = get_password_hash(pwd_str)
 
         if "backup_codes" in normalized_data and not isinstance(normalized_data["backup_codes"], str):
             normalized_data["backup_codes"] = json.dumps(normalized_data["backup_codes"])
@@ -916,9 +987,10 @@ def delete_cms_item(
     id: int,
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
-    _admin=Depends(RoleChecker(["admin"])),
+    current_admin: RecruitmentAdmin = Depends(get_current_admin),
 ):
-    """Delete dynamic CMS record (Admin only)."""
+    """Delete dynamic CMS record (Admin or Marketing depending on model)."""
+    check_cms_write_access(model, current_admin)
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
