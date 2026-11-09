@@ -2,6 +2,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_company as get_db, get_db as get_karir_db
@@ -22,7 +23,7 @@ from app.models.cms import (
 from app.models.auth import User, RecruitmentAdmin
 from app.schemas.cms import ContactSubmissionCreate, ContactSubmissionResponse
 from app.schemas.common import ApiResponse, StatusResponse
-from app.api.deps import get_current_admin, RoleChecker
+from app.api.deps import get_current_admin, RoleChecker, security_scheme
 from app.core.middleware import limiter
 from app.core.security import get_password_hash, verify_password, create_access_token, verify_totp
 
@@ -75,12 +76,16 @@ def reorder_nav_menus(
 # --- ADMIN MENUS (DINAMIS SIDEBAR & TOP NAV) ---
 @router.get("/admin-menus")
 def list_admin_menus(
+    request: Request,
     portal: Optional[str] = Query(None, description="perusahaan | karir | both"),
     location: Optional[str] = Query(None, description="admin_sidebar | admin_top"),
     role: Optional[str] = Query(None, description="filter by role, e.g. admin"),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
     db: Session = Depends(get_db),
+    karir_db: Session = Depends(get_karir_db),
 ):
-    """Public read for admin nav — filter by portal/location/role. is_active=true only."""
+    """Admin menus read — wajib autentikasi (internal secret atau JWT admin). is_active=true only."""
+    check_cms_model_access("admin-menus", request=request, db=karir_db, credentials=credentials)
     q = db.query(AdminMenu).filter(AdminMenu.is_active == True)  # noqa: E712
     if portal:
         q = q.filter((AdminMenu.portal == portal) | (AdminMenu.portal == "both"))
@@ -358,10 +363,67 @@ def serialize_cms_record(
 
     return d
 
+
+# Daftar model CMS yang dapat dibaca secara publik oleh situs utama
+PUBLIC_GET_MODELS = {
+    "hero-sections",
+    "nav-menus",
+    "announcements",
+    "partners",
+    "features",
+    "services",
+    "products",
+    "blog-posts",
+    "testimonials",
+    "faqs",
+    "statistics",
+    "certifications",
+    "facilities",
+    "sustainability-reports",
+    "pages",
+    "settings",
+}
+
+# Model sensitif yang wajib diotentikasi (users, contacts, admin-menus)
+SENSITIVE_GET_MODELS = {
+    "users",
+    "contacts",
+    "admin-menus",
+}
+
+
+def check_cms_model_access(
+    model: str,
+    request: Request,
+    db: Session,
+    credentials: Optional[HTTPAuthorizationCredentials] = None,
+) -> Optional[RecruitmentAdmin]:
+    """
+    Periksa hak akses pembacaan model CMS:
+    - Model dalam PUBLIC_GET_MODELS diizinkan tanpa autentikasi.
+    - Model sensitif (users, contacts, admin-menus) dan model baru (default-deny) WAJIB autentikasi.
+    - Model 'users' hanya diizinkan untuk peran 'admin'.
+    """
+    m = model.lower()
+    if m in PUBLIC_GET_MODELS:
+        return None
+
+    # Default-deny: wajib autentikasi (X-Internal-Secret atau JWT)
+    admin = get_current_admin(request=request, credentials=credentials, db=db)
+    if m == "users" and admin.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak. Model 'users' hanya dapat diakses oleh peran admin.",
+        )
+    return admin
+
+
 # --- DYNAMIC CMS CRUD FOR WEB PERUSAHAAN ---
 @router.get("/{model}")
 def get_cms_items(
     model: str,
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
 ):
@@ -374,6 +436,9 @@ def get_cms_items(
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
+
+    # Proteksi akses model sensitif & default-deny untuk model baru
+    check_cms_model_access(model, request=request, db=karir_db, credentials=credentials)
 
     # Bidirectional synchronization for users between web_perusahaan and web_karir
     if model == "users":
@@ -520,6 +585,8 @@ def get_cms_items(
 def get_cms_item_by_id(
     model: str,
     id: int,
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
 ):
@@ -527,6 +594,8 @@ def get_cms_item_by_id(
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
+
+    check_cms_model_access(model, request=request, db=karir_db, credentials=credentials)
 
     item = crud.get(db, id)
     if not item:
@@ -724,10 +793,7 @@ def create_cms_item(
         except Exception:
             karir_db.rollback()
 
-    item_dict = {c.name: getattr(new_item, c.name) for c in new_item.__table__.columns}
-    if "password" in item_dict:
-        item_dict["password"] = "******"
-
+    item_dict = serialize_cms_record(model, new_item)
     return ApiResponse(data=item_dict, message=f"Data {model} berhasil ditambahkan.")
 
 
@@ -840,10 +906,7 @@ def update_cms_item(
     clean_data = {k: v for k, v in normalized_data.items() if hasattr(crud.model, k) and k not in ["id", "created_at", "updated_at"]}
     updated = crud.update(db, db_obj=item, obj_in=clean_data)
 
-    item_dict = {c.name: getattr(updated, c.name) for c in updated.__table__.columns}
-    if "password" in item_dict:
-        item_dict["password"] = "******"
-
+    item_dict = serialize_cms_record(model, updated)
     return ApiResponse(data=item_dict, message=f"Data {model} berhasil diperbarui.")
 
 

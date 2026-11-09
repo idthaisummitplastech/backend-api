@@ -1,5 +1,17 @@
+import pytest
 from unittest.mock import MagicMock
-from app.api.v1.endpoints.cms import serialize_cms_record, SENSITIVE_MODEL_COLUMNS
+from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
+from app.core.config import settings
+from app.core.security import create_access_token
+from app.models.auth import RecruitmentAdmin
+from app.api.v1.endpoints.cms import (
+    serialize_cms_record,
+    SENSITIVE_MODEL_COLUMNS,
+    check_cms_model_access,
+    PUBLIC_GET_MODELS,
+    SENSITIVE_GET_MODELS,
+)
 
 
 class ColumnStub:
@@ -93,3 +105,116 @@ def test_non_user_model_preserves_regular_columns():
     assert result["title"] == "Company Milestone 2026"
     assert result["slug"] == "milestone-2026"
     assert result["is_published"] is True
+
+
+def test_public_models_allow_anonymous_access():
+    """Verify models in PUBLIC_GET_MODELS allow anonymous GET without credentials."""
+    mock_request = MagicMock()
+    mock_db = MagicMock()
+
+    for model in ["hero-sections", "nav-menus", "services", "products", "settings"]:
+        assert model in PUBLIC_GET_MODELS
+        res = check_cms_model_access(model, request=mock_request, db=mock_db, credentials=None)
+        assert res is None
+
+
+def test_sensitive_contacts_requires_auth():
+    """Verify 'contacts' model rejects unauthenticated request with 401."""
+    mock_request = MagicMock()
+    mock_request.headers.get.return_value = None
+    mock_db = MagicMock()
+
+    with pytest.raises(HTTPException) as exc:
+        check_cms_model_access("contacts", request=mock_request, db=mock_db, credentials=None)
+    assert exc.value.status_code == 401
+
+
+def test_sensitive_contacts_allows_internal_secret():
+    """Verify 'contacts' model allows request with valid X-Internal-Secret."""
+    mock_request = MagicMock()
+    mock_request.headers.get.side_effect = lambda h: settings.SECRET_KEY if h.lower() == "x-internal-secret" else None
+    mock_db = MagicMock()
+    fake_admin = RecruitmentAdmin(id=1, username="admin", role="admin", email="admin@itsp.co.id")
+    mock_db.query().filter().first.return_value = fake_admin
+
+    admin = check_cms_model_access("contacts", request=mock_request, db=mock_db, credentials=None)
+    assert admin is not None
+    assert admin.role == "admin"
+
+
+def test_sensitive_admin_menus_allows_jwt():
+    """Verify 'admin-menus' model allows request with valid JWT Bearer token."""
+    token = create_access_token(subject=1, role="hr")
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    mock_request = MagicMock()
+    mock_request.headers.get.return_value = None
+
+    fake_admin = RecruitmentAdmin(id=1, username="hruser", role="hr", email="hr@itsp.co.id")
+    mock_db = MagicMock()
+    from app.crud.crud_auth import crud_admin
+    orig_get = crud_admin.get
+    crud_admin.get = MagicMock(return_value=fake_admin)
+
+    try:
+        admin = check_cms_model_access("admin-menus", request=mock_request, db=mock_db, credentials=credentials)
+        assert admin is not None
+        assert admin.id == 1
+    finally:
+        crud_admin.get = orig_get
+
+
+def test_sensitive_users_rejects_non_admin_role():
+    """Verify 'users' model rejects non-admin JWT (e.g. hr/marketing) with 403."""
+    token = create_access_token(subject=2, role="marketing")
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    mock_request = MagicMock()
+    mock_request.headers.get.return_value = None
+
+    fake_marketing = RecruitmentAdmin(id=2, username="mkt", role="marketing", email="mkt@itsp.co.id")
+    mock_db = MagicMock()
+    from app.crud.crud_auth import crud_admin
+    orig_get = crud_admin.get
+    crud_admin.get = MagicMock(return_value=fake_marketing)
+
+    try:
+        with pytest.raises(HTTPException) as exc:
+            check_cms_model_access("users", request=mock_request, db=mock_db, credentials=credentials)
+        assert exc.value.status_code == 403
+        assert "hanya dapat diakses oleh peran admin" in exc.value.detail
+    finally:
+        crud_admin.get = orig_get
+
+
+def test_sensitive_users_allows_admin_role():
+    """Verify 'users' model permits admin JWT."""
+    token = create_access_token(subject=1, role="admin")
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    mock_request = MagicMock()
+    mock_request.headers.get.return_value = None
+
+    fake_admin = RecruitmentAdmin(id=1, username="admin", role="admin", email="admin@itsp.co.id")
+    mock_db = MagicMock()
+    from app.crud.crud_auth import crud_admin
+    orig_get = crud_admin.get
+    crud_admin.get = MagicMock(return_value=fake_admin)
+
+    try:
+        admin = check_cms_model_access("users", request=mock_request, db=mock_db, credentials=credentials)
+        assert admin is not None
+        assert admin.role == "admin"
+    finally:
+        crud_admin.get = orig_get
+
+
+def test_default_deny_for_new_or_unregistered_model():
+    """Verify newly introduced models outside PUBLIC_GET_MODELS default to requiring authentication."""
+    mock_request = MagicMock()
+    mock_request.headers.get.return_value = None
+    mock_db = MagicMock()
+
+    # Model not in PUBLIC_GET_MODELS must require auth (default-deny)
+    with pytest.raises(HTTPException) as exc:
+        check_cms_model_access("internal_audit_logs", request=mock_request, db=mock_db, credentials=None)
+    assert exc.value.status_code == 401
+
+

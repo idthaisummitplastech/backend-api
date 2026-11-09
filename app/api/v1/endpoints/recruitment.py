@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from app.services.employee_import_service import parse_employee_sheet
 
@@ -443,6 +443,7 @@ def get_recruitment_admins(
 @router.post("/admins", response_model=ApiResponse[AdminResponse])
 def create_recruitment_admin(
     payload: AdminCreate,
+    response: Response,
     db: Session = Depends(get_db),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["admin"])),
 ):
@@ -467,6 +468,8 @@ def create_recruitment_admin(
     temp_pwd = getattr(new_admin, "_temp_password", None)
     if temp_pwd:
         response_data["temp_password"] = temp_pwd
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+        response.headers["Pragma"] = "no-cache"
     return response_data
 
 
@@ -513,6 +516,7 @@ def delete_recruitment_admin(
 @router.post("/admins/{id}/reset-password")
 def reset_recruitment_admin_password(
     id: int,
+    response: Response,
     db: Session = Depends(get_db),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["admin"])),
 ):
@@ -522,12 +526,14 @@ def reset_recruitment_admin_password(
         raise HTTPException(status_code=404, detail="Admin tidak ditemukan.")
     crud_admin.reset_to_default_password(db, db_obj=admin)
     temp_pwd = getattr(admin, "_temp_password", None)
-    response = {
+    response_body = {
         "message": "Kata sandi admin berhasil direset. Pengguna wajib memperbarui kata sandi saat login berikutnya.",
     }
     if temp_pwd:
-        response["temp_password"] = temp_pwd
-    return response
+        response_body["temp_password"] = temp_pwd
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+        response.headers["Pragma"] = "no-cache"
+    return response_body
 
 
 @router.get("/karyawan-sementara", response_model=ApiResponse[List[KaryawanSementaraResponse]])
