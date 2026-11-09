@@ -84,7 +84,7 @@ def login_cms_user(
     is_first = bool(getattr(user, "is_first_login", False))
     admin_roles = ["admin", "hr", "user_dept", "marketing"]
     mfa_pending = (user.role in admin_roles and not user.mfa_enabled)
-    token_scope = "first_login_setup" if (is_first or mfa_pending) else None
+    token_scope = "first_login_setup" if (settings.FIRST_LOGIN_ENFORCE and (is_first or mfa_pending)) else None
 
     token = create_access_token(
         subject=str(user.id),
@@ -339,7 +339,7 @@ def login_ats_admin(
             is_first = bool(getattr(cms_user, "is_first_login", False) or (ats_admin and getattr(ats_admin, "is_first_login", False)))
             admin_roles = ["admin", "hr", "user_dept", "marketing"]
             mfa_pending = (admin_role in admin_roles and not cms_user.mfa_enabled)
-            token_scope = "first_login_setup" if (is_first or mfa_pending) else None
+            token_scope = "first_login_setup" if (settings.FIRST_LOGIN_ENFORCE and (is_first or mfa_pending)) else None
 
             token = create_access_token(
                 subject=str(admin_id),
@@ -454,7 +454,7 @@ def login_ats_admin(
         is_first = bool(getattr(local_admin, "is_first_login", False))
         admin_roles = ["admin", "hr", "user_dept", "marketing"]
         mfa_pending = (local_admin.role in admin_roles and not local_admin.is_mfa_enabled)
-        token_scope = "first_login_setup" if (is_first or mfa_pending) else None
+        token_scope = "first_login_setup" if (settings.FIRST_LOGIN_ENFORCE and (is_first or mfa_pending)) else None
 
         token = create_access_token(
             subject=str(local_admin.id),

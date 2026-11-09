@@ -74,7 +74,7 @@ class AuthService:
         is_first = bool(getattr(admin, "is_first_login", False))
         admin_roles = ["admin", "hr", "user_dept", "marketing"]
         mfa_pending = (admin.role in admin_roles and not getattr(admin, "is_mfa_enabled", False))
-        token_scope = "first_login_setup" if (is_first or mfa_pending) else None
+        token_scope = "first_login_setup" if (settings.FIRST_LOGIN_ENFORCE and (is_first or mfa_pending)) else None
 
         token = create_access_token(
             subject=admin.id,

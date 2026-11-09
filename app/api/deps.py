@@ -72,7 +72,7 @@ def get_current_admin(
         )
 
     # Dependency guard: tolak token ber-scope terbatas di luar alur ganti password dan setup MFA
-    if payload.get("scope") == "first_login_setup":
+    if settings.FIRST_LOGIN_ENFORCE and payload.get("scope") == "first_login_setup":
         path = request.url.path if request else ""
         allowed_setup_prefixes = (
             "/api/v1/auth/mfa",

@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = False
     VERSION: str = "1.0.0"
+    FIRST_LOGIN_ENFORCE: bool = False
 
     # Security & Cryptography — WAJIB via env, tanpa fallback di code.
     SECRET_KEY: str = ""
