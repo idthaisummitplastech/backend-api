@@ -1,4 +1,5 @@
 import json
+import secrets
 from typing import Any, Dict
 import pyotp
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -23,6 +24,16 @@ from app.core.security import verify_password, create_access_token
 from app.core.config import settings
 
 router = APIRouter()
+
+
+def require_internal_secret(request: Request) -> None:
+    """Validasi secret komunikasi internal proxy Next.js. Tolak pemanggilan langsung dari internet."""
+    internal_key = request.headers.get("x-internal-secret") or request.headers.get("X-Internal-Secret")
+    if not internal_key or not secrets.compare_digest(internal_key, settings.SECRET_KEY):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak. Endpoint hanya dapat diakses melalui internal proxy.",
+        )
 
 
 @router.post("/cms-login")
@@ -557,6 +568,11 @@ def setup_mfa(
     db: Session = Depends(get_db),
 ):
     """Generate 2FA TOTP secret and QR URI."""
+    if getattr(current_admin, "is_mfa_enabled", False):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA sudah aktif. Setup ulang tidak diizinkan.",
+        )
     result = auth_service.setup_admin_mfa(db, current_admin.id)
     return ApiResponse(data=MFASetupResponse(**result))
 
@@ -586,20 +602,31 @@ def verify_mfa(
 @router.get("/cms-mfa/{user_id}")
 def get_cms_user_mfa(
     user_id: int,
+    request: Request,
     db: Session = Depends(get_db_company),
 ):
     """Retrieve CMS user MFA configuration."""
+    require_internal_secret(request)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+
+    backup_codes_count = 0
+    if user.backup_codes:
+        try:
+            backup_codes_count = len(json.loads(user.backup_codes))
+        except Exception:
+            pass
+
     return {
         "id": user.id,
         "email": user.email,
         "name": user.name,
         "role": user.role,
-        "mfa_enabled": user.mfa_enabled,
-        "mfa_secret": user.mfa_secret,
-        "backup_codes": user.backup_codes,
+        "mfa_enabled": bool(user.mfa_enabled),
+        # Secret hanya dikembalikan saat setup awal (mfa_enabled=False). Setelah aktif, dilarang bocor.
+        "mfa_secret": user.mfa_secret if not user.mfa_enabled else None,
+        "backup_codes_count": backup_codes_count,
     }
 
 
@@ -607,12 +634,18 @@ def get_cms_user_mfa(
 def save_cms_mfa_secret(
     user_id: int,
     payload: Dict[str, Any],
+    request: Request,
     db: Session = Depends(get_db_company),
 ):
     """Save generated MFA secret for CMS user before activation."""
+    require_internal_secret(request)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+
+    if user.mfa_enabled:
+        raise HTTPException(status_code=400, detail="MFA sudah aktif. Secret tidak dapat diubah.")
+
     secret = payload.get("secret")
     if secret:
         user.mfa_secret = secret
@@ -623,16 +656,24 @@ def save_cms_mfa_secret(
 @router.post("/cms-mfa/activate")
 def activate_cms_mfa(
     payload: Dict[str, Any],
+    request: Request,
     db: Session = Depends(get_db_company),
 ):
     """Activate MFA for CMS user after code verification."""
+    require_internal_secret(request)
     user_id = payload.get("user_id") or payload.get("userId")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID wajib disertakan.")
+
     secret = payload.get("secret")
     backup_codes = payload.get("backup_codes") or payload.get("backupCodes")
 
     user = db.query(User).filter(User.id == int(user_id)).first()
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+
+    if user.mfa_enabled:
+        raise HTTPException(status_code=400, detail="MFA sudah aktif pada akun ini.")
 
     user.mfa_enabled = True
     if secret:
@@ -668,10 +709,15 @@ def activate_cms_mfa(
 @router.post("/cms-mfa/verify")
 def verify_cms_mfa(
     payload: Dict[str, Any],
+    request: Request,
     db: Session = Depends(get_db_company),
 ):
     """Verify MFA code or backup code for CMS user login."""
+    require_internal_secret(request)
     user_id = payload.get("user_id") or payload.get("userId")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User ID wajib disertakan.")
+
     code = str(payload.get("code", "")).strip().replace(" ", "")
 
     user = db.query(User).filter(User.id == int(user_id)).first()
@@ -716,13 +762,18 @@ def verify_cms_mfa(
 @router.get("/ats-mfa/{admin_id}/setup")
 def get_ats_admin_mfa_setup(
     admin_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     db_company: Session = Depends(get_db_company),
 ):
     """Retrieve or initialize MFA TOTP secret for ATS Admin."""
+    require_internal_secret(request)
     admin = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.id == admin_id).first()
     if not admin:
         raise HTTPException(status_code=404, detail="Admin rekrutmen tidak ditemukan.")
+
+    if admin.is_mfa_enabled:
+        raise HTTPException(status_code=400, detail="MFA sudah aktif. Setup ulang tidak diizinkan.")
 
     secret = admin.mfa_secret
     if not secret:
@@ -749,11 +800,16 @@ def get_ats_admin_mfa_setup(
 @router.post("/ats-mfa/verify")
 def verify_ats_admin_mfa(
     payload: Dict[str, Any],
+    request: Request,
     db: Session = Depends(get_db),
     db_company: Session = Depends(get_db_company),
 ):
     """Activate or deactivate MFA for ATS admin."""
+    require_internal_secret(request)
     admin_id = payload.get("admin_id") or payload.get("adminId")
+    if not admin_id:
+        raise HTTPException(status_code=400, detail="Admin ID wajib disertakan.")
+
     code = str(payload.get("code", "")).strip().replace(" ", "")
     enable = bool(payload.get("enable"))
 
@@ -762,6 +818,8 @@ def verify_ats_admin_mfa(
         raise HTTPException(status_code=404, detail="Admin tidak ditemukan.")
 
     if enable:
+        if admin.is_mfa_enabled:
+            raise HTTPException(status_code=400, detail="MFA sudah aktif.")
         if not admin.mfa_secret:
             raise HTTPException(status_code=400, detail="Secret MFA belum diinisialisasi.")
 
@@ -789,16 +847,22 @@ def verify_ats_admin_mfa(
         admin_roles = ["admin", "hr", "user_dept", "marketing"]
         if admin.role in admin_roles:
             raise HTTPException(
-                status_code=400,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail="MFA wajib aktif untuk akun administrator dan tidak dapat dinonaktifkan.",
             )
 
         if not admin.mfa_secret:
             raise HTTPException(status_code=400, detail="MFA belum diaktifkan.")
 
+        current_password = str(payload.get("current_password") or payload.get("password") or "").strip()
+        pw_ok = current_password and verify_password(current_password, admin.password)
         totp = pyotp.TOTP(admin.mfa_secret)
-        if not totp.verify(code, valid_window=30):
-            raise HTTPException(status_code=400, detail="Kode verifikasi 6-digit tidak valid atau sudah kedaluwarsa.")
+        totp_ok = code and totp.verify(code, valid_window=30)
+        if not (pw_ok or totp_ok):
+            raise HTTPException(
+                status_code=400,
+                detail="Menonaktifkan MFA memerlukan kode verifikasi TOTP yang valid atau kata sandi akun.",
+            )
 
         admin.is_mfa_enabled = False
         db.commit()
