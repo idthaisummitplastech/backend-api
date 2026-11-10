@@ -136,7 +136,7 @@ def test_sensitive_contacts_allows_internal_secret_with_admin_role():
     """Verify 'contacts' model allows request with valid X-Internal-Secret and X-Admin-Role."""
     mock_request = MagicMock()
     headers_map = {
-        "x-internal-secret": settings.SECRET_KEY,
+        "x-internal-secret": settings.INTERNAL_API_SECRET,
         "x-admin-role": "admin",
     }
     mock_request.headers.get.side_effect = lambda h: headers_map.get(h.lower())
@@ -150,7 +150,7 @@ def test_sensitive_contacts_allows_internal_secret_with_admin_role():
 def test_internal_secret_without_role_rejected_with_403():
     """Verify X-Internal-Secret without X-Admin-Role and without X-Admin-Id is rejected with 403."""
     mock_request = MagicMock()
-    mock_request.headers.get.side_effect = lambda h: settings.SECRET_KEY if h.lower() == "x-internal-secret" else None
+    mock_request.headers.get.side_effect = lambda h: settings.INTERNAL_API_SECRET if h.lower() == "x-internal-secret" else None
     mock_db = MagicMock()
 
     with pytest.raises(HTTPException) as exc:
@@ -166,7 +166,7 @@ def test_internal_secret_with_mismatched_admin_id_and_role_rejected():
 
     mock_request = MagicMock()
     headers_map = {
-        "x-internal-secret": settings.SECRET_KEY,
+        "x-internal-secret": settings.INTERNAL_API_SECRET,
         "x-admin-id": "5",
         "x-admin-role": "admin",
     }

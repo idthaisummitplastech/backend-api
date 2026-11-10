@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.config import settings
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, verify_internal_api_secret
 from app.crud.crud_auth import crud_admin
 from app.crud.crud_recruitment import crud_applicant
 from app.models.auth import RecruitmentAdmin, User
@@ -23,7 +23,7 @@ def get_current_admin(
     """Validate Bearer JWT or internal service secret and retrieve authenticated Admin / HR entity."""
     # 1. Allow internal service communication from Next.js server actions
     internal_key = request.headers.get("x-internal-secret") or request.headers.get("X-Internal-Secret")
-    if internal_key and internal_key == settings.SECRET_KEY:
+    if verify_internal_api_secret(internal_key):
         admin_id_hdr = request.headers.get("x-admin-id") or request.headers.get("X-Admin-Id")
         admin_role_hdr = request.headers.get("x-admin-role") or request.headers.get("X-Admin-Role")
         admin_dept_hdr = request.headers.get("x-admin-department") or request.headers.get("X-Admin-Department")

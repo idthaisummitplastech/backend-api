@@ -20,7 +20,7 @@ from app.api.deps import get_current_admin, get_current_applicant
 from app.models.auth import RecruitmentAdmin, User
 from app.models.recruitment import Applicant
 from app.core.middleware import limiter
-from app.core.security import verify_password, create_access_token
+from app.core.security import verify_password, create_access_token, verify_internal_api_secret
 from app.core.config import settings
 
 router = APIRouter()
@@ -29,7 +29,7 @@ router = APIRouter()
 def require_internal_secret(request: Request) -> None:
     """Validasi secret komunikasi internal proxy Next.js. Tolak pemanggilan langsung dari internet."""
     internal_key = request.headers.get("x-internal-secret") or request.headers.get("X-Internal-Secret")
-    if not internal_key or not secrets.compare_digest(internal_key, settings.SECRET_KEY):
+    if not verify_internal_api_secret(internal_key):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Akses ditolak. Endpoint hanya dapat diakses melalui internal proxy.",

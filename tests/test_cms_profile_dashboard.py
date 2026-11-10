@@ -42,7 +42,7 @@ def test_cms_profile_allows_internal_secret():
     )
     db.query(User).filter().first.return_value = fake_user
 
-    req = make_request({"X-Internal-Secret": settings.SECRET_KEY})
+    req = make_request({"X-Internal-Secret": settings.INTERNAL_API_SECRET})
     resp = get_cms_profile(user_id=1, request=req, db=db)
     data = resp.data
     assert data["id"] == 1
@@ -63,7 +63,7 @@ def test_dashboard_stats_requires_secret_and_role():
 
     # 2. Dengan secret tapi role tidak sah (misal guest) -> 403
     req_invalid_role = make_request({
-        "X-Internal-Secret": settings.SECRET_KEY,
+        "X-Internal-Secret": settings.INTERNAL_API_SECRET,
         "X-Admin-Role": "guest",
     })
     with pytest.raises(HTTPException) as exc2:
@@ -82,7 +82,7 @@ def test_dashboard_stats_role_based_recent_contacts():
 
     # 1. Admin role -> recent_contacts terisi
     req_admin = make_request({
-        "X-Internal-Secret": settings.SECRET_KEY,
+        "X-Internal-Secret": settings.INTERNAL_API_SECRET,
         "X-Admin-Role": "admin",
     })
     resp_admin = get_dashboard_stats(req_admin, db=db)
@@ -91,7 +91,7 @@ def test_dashboard_stats_role_based_recent_contacts():
 
     # 2. Marketing role -> recent_contacts kosong
     req_marketing = make_request({
-        "X-Internal-Secret": settings.SECRET_KEY,
+        "X-Internal-Secret": settings.INTERNAL_API_SECRET,
         "X-Admin-Role": "marketing",
     })
     resp_mkt = get_dashboard_stats(req_marketing, db=db)

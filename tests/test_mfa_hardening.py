@@ -39,7 +39,7 @@ def test_require_internal_secret_rejects_missing_or_invalid():
     assert exc2.value.status_code == 403
 
     # Secret valid -> lulus tanpa exception
-    req_valid = make_request({"X-Internal-Secret": settings.SECRET_KEY})
+    req_valid = make_request({"X-Internal-Secret": settings.INTERNAL_API_SECRET})
     require_internal_secret(req_valid)
 
 
@@ -73,7 +73,7 @@ def test_get_cms_user_mfa_hardening():
     assert exc.value.status_code == 403
 
     # 2. Panggilan dengan secret valid saat mfa_enabled=False: secret dikembalikan untuk setup
-    req_auth = make_request({"X-Internal-Secret": settings.SECRET_KEY})
+    req_auth = make_request({"X-Internal-Secret": settings.INTERNAL_API_SECRET})
     res_unverified = get_cms_user_mfa(1, req_auth, db)
     assert res_unverified["mfa_enabled"] is False
     assert res_unverified["mfa_secret"] == "SECRETTEST123456"
@@ -95,7 +95,7 @@ def test_save_cms_mfa_secret_hardening():
 
     db.query().filter().first.side_effect = [user_active, user_unverified]
 
-    req_auth = make_request({"X-Internal-Secret": settings.SECRET_KEY})
+    req_auth = make_request({"X-Internal-Secret": settings.INTERNAL_API_SECRET})
 
     # Coba timpa secret akun yang sudah aktif -> ditolak 400
     with pytest.raises(HTTPException) as exc:
@@ -120,7 +120,7 @@ def test_activate_cms_mfa_hardening():
     assert exc1.value.status_code == 403
 
     # Dengan secret tapi akun sudah aktif -> 400
-    req_auth = make_request({"X-Internal-Secret": settings.SECRET_KEY})
+    req_auth = make_request({"X-Internal-Secret": settings.INTERNAL_API_SECRET})
     with pytest.raises(HTTPException) as exc2:
         activate_cms_mfa({"user_id": 2}, req_auth, db)
     assert exc2.value.status_code == 400
@@ -140,7 +140,7 @@ def test_ats_admin_mfa_hardening():
         get_ats_admin_mfa_setup(1, make_request({}), db, db_comp)
     assert exc1.value.status_code == 403
 
-    req_auth = make_request({"X-Internal-Secret": settings.SECRET_KEY})
+    req_auth = make_request({"X-Internal-Secret": settings.INTERNAL_API_SECRET})
 
     # 2. Setup saat sudah aktif -> 400
     with pytest.raises(HTTPException) as exc2:

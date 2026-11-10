@@ -53,7 +53,7 @@ app.dependency_overrides[get_db_company] = override_get_db
 # Real TestClient (no dependency override on auth!)
 client = TestClient(app)
 
-SECRET = settings.SECRET_KEY
+SECRET = settings.INTERNAL_API_SECRET
 
 
 @pytest.fixture(scope="module", autouse=True)

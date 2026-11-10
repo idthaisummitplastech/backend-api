@@ -1,3 +1,4 @@
+import hmac
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Union
@@ -19,6 +20,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return bcrypt.checkpw(pwd_bytes, hash_bytes)
     except Exception:
         return False
+
 
 
 def get_password_hash(password: str) -> str:
@@ -113,3 +115,16 @@ def verify_totp(secret: str, code: str, valid_window: int = 30) -> bool:
         return totp.verify(code.strip(), valid_window=valid_window)
     except Exception:
         return False
+
+
+def verify_internal_api_secret(secret_header: Optional[str]) -> bool:
+    """
+    Verifikasi X-Internal-Secret dengan waktu konstan (timing attack safe).
+    Memastikan secret terkonfigurasi, panjang minimal 32 karakter, dan cocok dengan INTERNAL_API_SECRET.
+    Secret kosong atau terlalu pendek tidak pernah cocok.
+    """
+    configured_secret = getattr(settings, "INTERNAL_API_SECRET", "") or ""
+    if not secret_header or not configured_secret or len(configured_secret) < 32:
+        return False
+    return hmac.compare_digest(secret_header, configured_secret)
+
