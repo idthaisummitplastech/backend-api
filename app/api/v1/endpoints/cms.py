@@ -694,6 +694,7 @@ def create_cms_item(
 ):
     """Create dynamic CMS record (Admin or Marketing depending on model)."""
     check_cms_write_access(model, current_admin)
+    generated_temp_pwd: Optional[str] = None
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
@@ -905,6 +906,7 @@ def update_cms_item(
 ):
     """Update dynamic CMS record (Admin or Marketing depending on model)."""
     check_cms_write_access(model, current_admin)
+    generated_temp_pwd: Optional[str] = None
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
@@ -1026,6 +1028,7 @@ def delete_cms_item(
 ):
     """Delete dynamic CMS record (Admin or Marketing depending on model)."""
     check_cms_write_access(model, current_admin)
+    generated_temp_pwd: Optional[str] = None
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
