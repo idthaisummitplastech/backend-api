@@ -10,9 +10,11 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = False
     VERSION: str = "1.0.0"
+    FIRST_LOGIN_ENFORCE: bool = False
 
     # Security & Cryptography — WAJIB via env, tanpa fallback di code.
     SECRET_KEY: str = ""
+    INTERNAL_API_SECRET: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 hours for Admin/HR
     APPLICANT_TOKEN_EXPIRE_MINUTES: int = 180  # 3 hours for Applicants
@@ -85,6 +87,8 @@ class Settings(BaseSettings):
         missing: list[str] = []
         if not self.SECRET_KEY or len(self.SECRET_KEY) < 32:
             missing.append("SECRET_KEY (min 32 karakter via env)")
+        if not self.INTERNAL_API_SECRET or len(self.INTERNAL_API_SECRET) < 32:
+            missing.append("INTERNAL_API_SECRET (min 32 karakter via env)")
         if not self.DATABASE_URL:
             missing.append("DATABASE_URL (via env)")
         if not self.DATABASE_COMPANY_URL:

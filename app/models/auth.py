@@ -19,7 +19,7 @@ class RecruitmentAdmin(Base):
     is_mfa_enabled = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     portal_access = Column(String(20), default="both", nullable=False)  # perusahaan | karir | both
-    is_first_login = Column(Boolean, default=True, nullable=False)  # true=wajib ganti Itsp@YYYY
+    is_first_login = Column(Boolean, default=True, nullable=False)  # true=wajib ganti password saat login pertama
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 

@@ -71,11 +71,17 @@ class AuthService:
                     detail="Kode Autentikasi 2FA (TOTP) tidak valid atau kedaluwarsa.",
                 )
 
+        is_first = bool(getattr(admin, "is_first_login", False))
+        admin_roles = ["admin", "hr", "user_dept", "marketing"]
+        mfa_pending = (admin.role in admin_roles and not getattr(admin, "is_mfa_enabled", False))
+        token_scope = "first_login_setup" if (settings.FIRST_LOGIN_ENFORCE and (is_first or mfa_pending)) else None
+
         token = create_access_token(
             subject=admin.id,
             role=admin.role,
             department=admin.department,
-            extra_claims={"name": admin.name, "email": admin.email, "type": "admin", "employee_id": getattr(admin, "employee_id", None)},
+            extra_claims={"name": admin.name, "email": admin.email, "type": "ats", "employee_id": getattr(admin, "employee_id", None)},
+            scope=token_scope,
         )
         return Token(
             access_token=token,

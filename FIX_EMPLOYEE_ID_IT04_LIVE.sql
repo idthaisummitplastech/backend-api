@@ -1,6 +1,8 @@
 -- FIX_EMPLOYEE_ID_IT04_LIVE.sql — live 1-klik Employee ID polos 1526.08.26 (tanpa prefix ITSP.)
 -- Jalankan BLOK 1 di koneksi DB web_karir, lalu BLOK 2 di koneksi DB web_perusahaan (jangan cross-DB).
 -- Idempotent — aman di-rerun. Penting: jika Auto-commit OFF (DBeaver), COMMIT setelah STEP A sebelum STEP B.
+-- PERHATIAN KEAMANAN: Masukkan password awal yang kuat via variabel psql sebelum menjalankan skrip:
+--   \set it04_password 'GANTI_DENGAN_PASSWORD_KUAT_MIN_12_KARAKTER'
 
 -- ===================== BLOK 1: web_karir (recruitment_admins) — jalankan di DB web_karir =====================
 -- Diagnosis (opsional): cek DB aktif & kolom
@@ -14,7 +16,7 @@ ALTER TABLE public.recruitment_admins
 CREATE INDEX IF NOT EXISTS ix_recruitment_admins_employee_id ON public.recruitment_admins(employee_id);
 CREATE INDEX IF NOT EXISTS ix_recruitment_admins_is_first_login ON public.recruitment_admins(is_first_login);
 COMMENT ON COLUMN public.recruitment_admins.employee_id IS 'Immutable FK data_karyawan.employee_id 1526.08.26 polos tanpa prefix ITSP.';
-COMMENT ON COLUMN public.recruitment_admins.is_first_login IS 'true=wajib ganti password Itsp@YYYY';
+COMMENT ON COLUMN public.recruitment_admins.is_first_login IS 'true=wajib ganti password saat login pertama';
 -- >>> KLIK COMMIT di DBeaver di sini (atau pastikan Auto-commit ON) sebelum lanjut ke STEP 1B <<<
 
 -- STEP 1B — promote / insert (polos 1526.08.26; legacy ITSP.1526.08.26 ikut dibetulkan sekali jalan)
@@ -22,13 +24,13 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 UPDATE public.recruitment_admins
 SET employee_id='1526.08.26', username='it-04', name='IT Admin',
     role='admin', department='IT', is_active=true, portal_access='both',
-    is_first_login=true, password=crypt('Itsp@2026', gen_salt('bf',10))
+    is_first_login=true, password=crypt(:'it04_password', gen_salt('bf',12))
 WHERE lower(email)=lower('it-04@thaisummit.co.id')
    OR lower(username)=lower('it-04')
    OR employee_id='1526.08.26'
    OR employee_id='ITSP.1526.08.26'; -- legacy one-time
 INSERT INTO public.recruitment_admins (employee_id, username, name, email, password, role, department, is_active, portal_access, is_first_login, is_mfa_enabled)
-SELECT '1526.08.26','it-04','IT Admin','it-04@thaisummit.co.id',crypt('Itsp@2026', gen_salt('bf',10)),'admin','IT',true,'both',true,false
+SELECT '1526.08.26','it-04','IT Admin','it-04@thaisummit.co.id',crypt(:'it04_password', gen_salt('bf',12)),'admin','IT',true,'both',true,false
 WHERE NOT EXISTS (SELECT 1 FROM public.recruitment_admins WHERE employee_id IN ('1526.08.26','ITSP.1526.08.26') OR lower(email)=lower('it-04@thaisummit.co.id') OR lower(username)=lower('it-04'));
 
 -- Verifikasi web_karir (baru bisa SELECT employee_id setelah STEP 1A):
@@ -49,7 +51,7 @@ ALTER TABLE public.users ALTER COLUMN updated_at SET DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS ix_users_employee_id ON public.users(employee_id);
 CREATE INDEX IF NOT EXISTS ix_users_is_first_login ON public.users(is_first_login);
 COMMENT ON COLUMN public.users.employee_id IS 'Immutable Employee ID 1526.08.26 polos tanpa prefix ITSP.';
-COMMENT ON COLUMN public.users.is_first_login IS 'true=wajib ganti password Itsp@YYYY';
+COMMENT ON COLUMN public.users.is_first_login IS 'true=wajib ganti password saat login pertama';
 -- >>> KLIK COMMIT di DBeaver di sini (atau pastikan Auto-commit ON) sebelum lanjut ke STEP 2B <<<
 
 -- STEP 2B — promote / insert (isi NOW() eksplisit agar tetap lolos bila DEFAULT belum commit)
@@ -57,16 +59,16 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 UPDATE public.users
 SET employee_id='1526.08.26', username='it-04', name='IT Admin',
     role='admin', department='IT', is_active=true, portal_access='both',
-    is_first_login=true, password=crypt('Itsp@2026', gen_salt('bf',10)), updated_at=NOW()
+    is_first_login=true, password=crypt(:'it04_password', gen_salt('bf',12)), updated_at=NOW()
 WHERE lower(email)=lower('it-04@thaisummit.co.id')
    OR (username IS NOT NULL AND lower(username)=lower('it-04'))
    OR employee_id='1526.08.26'
    OR employee_id='ITSP.1526.08.26'; -- legacy one-time
 INSERT INTO public.users (employee_id, username, email, password, name, role, department, mfa_enabled, is_active, portal_access, is_first_login, created_at, updated_at)
-SELECT '1526.08.26','it-04','it-04@thaisummit.co.id',crypt('Itsp@2026', gen_salt('bf',10)),'IT Admin','admin','IT',false,true,'both',true, NOW(), NOW()
+SELECT '1526.08.26','it-04','it-04@thaisummit.co.id',crypt(:'it04_password', gen_salt('bf',12)),'IT Admin','admin','IT',false,true,'both',true, NOW(), NOW()
 WHERE NOT EXISTS (SELECT 1 FROM public.users WHERE employee_id IN ('1526.08.26','ITSP.1526.08.26') OR lower(email)=lower('it-04@thaisummit.co.id') OR (username IS NOT NULL AND lower(username)=lower('it-04')));
 
 -- Verifikasi web_perusahaan:
 SELECT id, employee_id, username, email, role, is_active, portal_access, is_first_login FROM public.users WHERE employee_id IN ('1526.08.26','ITSP.1526.08.26') OR lower(email)=lower('it-04@thaisummit.co.id');
 
--- Login test setelah kedua blok: Employee ID = 1526.08.26 (polos) | fallback email = it-04@thaisummit.co.id | password = Itsp@2026 (wajib ganti saat first login)
+-- Login test setelah kedua blok: Employee ID = 1526.08.26 (polos) | fallback email = it-04@thaisummit.co.id | password = nilai dari :it04_password (wajib ganti saat first login)

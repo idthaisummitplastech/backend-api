@@ -1,3 +1,4 @@
+import hmac
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Union
@@ -21,6 +22,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
+
 def get_password_hash(password: str) -> str:
     """Generate secure bcrypt password hash with salt factor 12."""
     pwd_bytes = password.encode("utf-8")
@@ -34,8 +36,10 @@ def create_access_token(
     department: Optional[str] = None,
     expires_delta: Optional[timedelta] = None,
     extra_claims: Optional[Dict[str, Any]] = None,
+    scope: Optional[str] = None,
+    token_type: Optional[str] = None,
 ) -> str:
-    """Generate cryptographically signed JWT access token with expiration and roles."""
+    """Generate cryptographically signed JWT access token with expiration, roles, and explicit token type."""
     now = datetime.now(timezone.utc)
     if expires_delta:
         expire = now + expires_delta
@@ -43,6 +47,13 @@ def create_access_token(
         expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
     claims = extra_claims.copy() if extra_claims else {}
+    if scope:
+        claims["scope"] = scope
+    if token_type and "type" not in claims:
+        claims["type"] = token_type
+    elif "type" not in claims and role == "applicant":
+        claims["type"] = "applicant"
+
     sub_val = subject
     if isinstance(subject, dict):
         sub_val = subject.get("sub") or subject.get("id") or subject.get("email")
@@ -104,3 +115,16 @@ def verify_totp(secret: str, code: str, valid_window: int = 30) -> bool:
         return totp.verify(code.strip(), valid_window=valid_window)
     except Exception:
         return False
+
+
+def verify_internal_api_secret(secret_header: Optional[str]) -> bool:
+    """
+    Verifikasi X-Internal-Secret dengan waktu konstan (timing attack safe).
+    Memastikan secret terkonfigurasi, panjang minimal 32 karakter, dan cocok dengan INTERNAL_API_SECRET.
+    Secret kosong atau terlalu pendek tidak pernah cocok.
+    """
+    configured_secret = getattr(settings, "INTERNAL_API_SECRET", "") or ""
+    if not secret_header or not configured_secret or len(configured_secret) < 32:
+        return False
+    return hmac.compare_digest(secret_header, configured_secret)
+

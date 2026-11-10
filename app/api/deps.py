@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.config import settings
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, verify_internal_api_secret
 from app.crud.crud_auth import crud_admin
 from app.crud.crud_recruitment import crud_applicant
 from app.models.auth import RecruitmentAdmin, User
@@ -23,38 +23,41 @@ def get_current_admin(
     """Validate Bearer JWT or internal service secret and retrieve authenticated Admin / HR entity."""
     # 1. Allow internal service communication from Next.js server actions
     internal_key = request.headers.get("x-internal-secret") or request.headers.get("X-Internal-Secret")
-    if internal_key and internal_key == settings.SECRET_KEY:
+    if verify_internal_api_secret(internal_key):
         admin_id_hdr = request.headers.get("x-admin-id") or request.headers.get("X-Admin-Id")
         admin_role_hdr = request.headers.get("x-admin-role") or request.headers.get("X-Admin-Role")
         admin_dept_hdr = request.headers.get("x-admin-department") or request.headers.get("X-Admin-Department")
 
         if admin_id_hdr:
             try:
-                admin_found = crud_admin.get(db, int(admin_id_hdr))
-                if admin_found:
-                    # hormati is_active jika ada
-                    if hasattr(admin_found, "is_active") and getattr(admin_found, "is_active") is False:
-                        raise HTTPException(status_code=403, detail="Account deactivated.")
-                    return admin_found
+                admin_id_val = int(admin_id_hdr)
             except (ValueError, TypeError):
-                pass
-            except HTTPException:
-                raise
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Header X-Admin-Id tidak valid.")
+
+            admin_found = crud_admin.get(db, admin_id_val)
+            if not admin_found:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun admin tidak ditemukan.")
+            if hasattr(admin_found, "is_active") and getattr(admin_found, "is_active") is False:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun dinonaktifkan.")
+            if admin_role_hdr and admin_role_hdr.lower() != (admin_found.role or "").lower():
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Header role tidak sesuai dengan data akun.")
+            return admin_found
 
         if admin_role_hdr:
             return RecruitmentAdmin(
-                id=int(admin_id_hdr) if admin_id_hdr and admin_id_hdr.isdigit() else 1,
+                id=0,
                 username="admin_internal",
                 name="Internal Service Admin",
                 role=admin_role_hdr.lower(),
                 department=admin_dept_hdr,
-                email="admin@itsp.co.id",
+                email="internal@system.local",
             )
 
-        admin = crud_admin.get_by_username(db, "admin")
-        if admin:
-            return admin
-        return RecruitmentAdmin(id=1, username="admin", name="Administrator", role="admin", email="admin@itsp.co.id")
+        # Tanpa X-Admin-Id dan tanpa X-Admin-Role: tolak 403 (hapus fallback superadmin)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Autentikasi internal memerlukan header X-Admin-Role atau X-Admin-Id.",
+        )
 
     if not credentials or not credentials.credentials:
         raise HTTPException(
@@ -68,6 +71,44 @@ def get_current_admin(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token tidak valid atau telah kedaluwarsa.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Dependency guard: tolak token ber-scope terbatas di luar alur ganti password dan setup MFA
+    if settings.FIRST_LOGIN_ENFORCE and payload.get("scope") == "first_login_setup":
+        path = request.url.path if request else ""
+        allowed_setup_prefixes = (
+            "/api/v1/auth/mfa",
+            "/api/v1/auth/cms-mfa",
+            "/api/v1/auth/ats-mfa",
+            "/api/v1/cms/profile",
+            "/api/v1/auth/me/admin",
+        )
+        if not any(path.startswith(prefix) for prefix in allowed_setup_prefixes):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Wajib mengganti kata sandi dan mengaktifkan MFA sebelum mengakses sistem",
+            )
+
+    # CAND-AUTH-01: Validasi tipe token eksplisit dan tolak token tanpa klaim type
+    token_type = payload.get("type")
+    if not token_type:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token tidak memiliki klaim tipe atau berformat lama. Silakan login kembali.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if token_type == "applicant":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak. Token sesi pelamar tidak memiliki wewenang akses administratif.",
+        )
+
+    if token_type not in ("ats", "cms"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Tipe token otentikasi tidak dikenali.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -89,43 +130,60 @@ def get_current_admin(
             except Exception:
                 pass
 
-    admin = None
-    if admin_id is not None:
-        admin = crud_admin.get(db, admin_id)
-        if not admin:
-            # Check User table in web_perusahaan
-            user = db.query(User).filter(User.id == admin_id).first()
-            if user:
-                admin = RecruitmentAdmin(
-                    id=user.id,
-                    username=user.username or user.email.split("@")[0],
-                    name=user.name,
-                    role=user.role,
-                    email=user.email,
-                    department=user.department,
-                )
-
-    if not admin and payload.get("email"):
-        admin = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email.ilike(payload.get("email"))).first()
-        if not admin:
-            user = db.query(User).filter(User.email.ilike(payload.get("email"))).first()
-            if user:
-                admin = RecruitmentAdmin(
-                    id=user.id,
-                    username=user.username or user.email.split("@")[0],
-                    name=user.name,
-                    role=user.role,
-                    email=user.email,
-                    department=user.department,
-                )
-
-    if not admin:
+    if admin_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Akun admin tidak terdaftar.",
+            detail="Identitas subjek (ID) pada token tidak valid.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return admin
+    payload_role = (payload.get("role") or "").lower()
+
+    if token_type == "ats":
+        admin = crud_admin.get(db, admin_id)
+        if not admin:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Akun admin rekrutmen tidak ditemukan.",
+            )
+        if hasattr(admin, "is_active") and getattr(admin, "is_active") is False:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun admin telah dinonaktifkan.")
+        db_role = (admin.role or "").lower()
+        if not payload_role or payload_role != db_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Wewenang (role) pada token tidak cocok dengan data akun pada basis data.",
+            )
+        return admin
+
+    elif token_type == "cms":
+        user = db.query(User).filter(User.id == admin_id).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Akun pengguna CMS tidak ditemukan.",
+            )
+        if hasattr(user, "is_active") and getattr(user, "is_active") is False:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun pengguna telah dinonaktifkan.")
+        db_role = (user.role or "").lower()
+        if not payload_role or payload_role != db_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Wewenang (role) pada token tidak cocok dengan data akun pada basis data.",
+            )
+        return RecruitmentAdmin(
+            id=user.id,
+            username=user.username or user.email.split("@")[0],
+            name=user.name,
+            role=user.role,
+            email=user.email,
+            department=user.department,
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Akun admin tidak terdaftar.",
+    )
 
 
 
@@ -159,6 +217,15 @@ def get_current_applicant(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token sesi pelamar tidak valid.",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # CAND-AUTH-01: Wajib klaim type=="applicant" dan role=="applicant"
+    token_type = payload.get("type")
+    token_role = payload.get("role")
+    if token_type != "applicant" or token_role != "applicant":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak. Token tidak valid untuk sesi pelamar.",
         )
 
     sub_val = payload["sub"]

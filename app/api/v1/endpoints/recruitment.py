@@ -1,6 +1,7 @@
+import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from app.services.employee_import_service import parse_employee_sheet
 
@@ -220,6 +221,7 @@ def schedule_interview(
 @router.post("/reset-password")
 def reset_applicant_password(
     payload: Dict[str, Any],
+    response: Response,
     db: Session = Depends(get_db),
     db_company: Session = Depends(get_db_company),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["hr", "admin"])),
@@ -228,13 +230,20 @@ def reset_applicant_password(
     target_type = str(payload.get("targetType") or payload.get("target_type") or "").strip().lower()
     target_id = int(payload.get("targetId") or payload.get("target_id") or payload.get("applicant_id") or payload.get("applicantId") or 0)
     new_password = str(payload.get("new_password") or payload.get("newPassword") or "").strip()
+    generated_temp_pwd = None
 
-    if not new_password or len(new_password) < 6:
+    if not new_password:
+        # C.5: Jika password baru kosong, buat password acak sementara sekali pakai (min 16 karakter)
+        generated_temp_pwd = secrets.token_urlsafe(16)
+        new_password = generated_temp_pwd
+    elif len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Password baru minimal 6 karakter.")
 
     if target_type == "admin":
         if not target_id:
             raise HTTPException(status_code=400, detail="ID Pengguna Staf/Admin wajib diisi.")
+        if not generated_temp_pwd and len(new_password) < 12:
+            raise HTTPException(status_code=400, detail="Password akun staf/admin minimal 12 karakter.")
 
         hashed = get_password_hash(new_password)
         target_email = None
@@ -244,6 +253,7 @@ def reset_applicant_password(
         comp_user = db_company.query(User).filter(User.id == target_id).first()
         if comp_user:
             comp_user.password = hashed
+            comp_user.is_first_login = True
             db_company.commit()
             target_email = comp_user.email
             user_name = comp_user.name
@@ -252,6 +262,7 @@ def reset_applicant_password(
             if not rec_user:
                 raise HTTPException(status_code=404, detail="Akun staf/admin tidak ditemukan.")
             rec_user.password = hashed
+            rec_user.is_first_login = True
             db.commit()
             target_email = rec_user.email
             user_name = rec_user.name
@@ -261,13 +272,24 @@ def reset_applicant_password(
             ra = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email.ilike(target_email)).first()
             if ra:
                 ra.password = hashed
+                ra.is_first_login = True
                 db.commit()
             cu = db_company.query(User).filter(User.email.ilike(target_email)).first()
             if cu:
                 cu.password = hashed
+                cu.is_first_login = True
                 db_company.commit()
 
-        return {"success": True, "message": f"Password akun staf/admin {user_name} berhasil direset."}
+        resp_body = {
+            "success": True,
+            "message": f"Password akun staf/admin {user_name} berhasil direset.",
+        }
+        if generated_temp_pwd:
+            resp_body["temp_password"] = generated_temp_pwd
+            if response:
+                response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+                response.headers["Pragma"] = "no-cache"
+        return resp_body
 
     # Default: Reset Applicant Password
     if not target_id:
@@ -280,7 +302,13 @@ def reset_applicant_password(
     applicant.password = get_password_hash(new_password)
     db.commit()
 
-    return {"success": True, "message": f"Password pelamar {applicant.full_name} berhasil direset."}
+    resp_body = {"success": True, "message": f"Password pelamar {applicant.full_name} berhasil direset."}
+    if generated_temp_pwd:
+        resp_body["temp_password"] = generated_temp_pwd
+        if response:
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+            response.headers["Pragma"] = "no-cache"
+    return resp_body
 
 
 @router.post("/reset-test")
@@ -441,10 +469,11 @@ def get_recruitment_admins(
 @router.post("/admins", response_model=ApiResponse[AdminResponse])
 def create_recruitment_admin(
     payload: AdminCreate,
+    response: Response,
     db: Session = Depends(get_db),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["admin"])),
 ):
-    """Create recruitment ATS admin user — Employee ID immutable, password default Itsp@YYYY."""
+    """Create recruitment ATS admin user — Employee ID immutable, is_first_login=true."""
     existing = crud_admin.get_by_username(db, payload.username)
     if existing:
         raise HTTPException(status_code=400, detail="Username sudah digunakan.")
@@ -455,9 +484,19 @@ def create_recruitment_admin(
         eid = str(payload.employee_id).strip()
         if eid and crud_admin.get_by_employee_id(db, eid):
             raise HTTPException(status_code=400, detail=f"Employee ID {eid} sudah digunakan.")
-    # allow empty password -> CRUD will hash Itsp@YYYY automatically
+    # allow empty password -> CRUD will generate secure random temp password
     new_admin = crud_admin.create(db, obj_in=payload)
-    return ApiResponse(data=AdminResponse.model_validate(new_admin), message=f"Akun admin rekrutmen berhasil dibuat. Password default: Itsp@{__import__('datetime').datetime.now(__import__('datetime').timezone.utc).year} (wajib ganti saat login pertama).")
+    response_data = {
+        "data": AdminResponse.model_validate(new_admin),
+        "message": "Akun admin rekrutmen berhasil dibuat. Kredensial awal wajib diganti pada saat login pertama.",
+    }
+    # Return one-time temp password to the creating admin (not logged, not stored)
+    temp_pwd = getattr(new_admin, "_temp_password", None)
+    if temp_pwd:
+        response_data["temp_password"] = temp_pwd
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+        response.headers["Pragma"] = "no-cache"
+    return response_data
 
 
 @router.put("/admins/{id}", response_model=ApiResponse[AdminResponse])
@@ -500,19 +539,27 @@ def delete_recruitment_admin(
     return StatusResponse(message="Akun admin berhasil dihapus.")
 
 
-@router.post("/admins/{id}/reset-password", response_model=StatusResponse)
+@router.post("/admins/{id}/reset-password")
 def reset_recruitment_admin_password(
     id: int,
+    response: Response,
     db: Session = Depends(get_db),
     _admin: RecruitmentAdmin = Depends(RoleChecker(["admin"])),
 ):
-    """Reset password admin ke Itsp@YYYY (tahun berjalan) — hash only on reset, is_first_login=true."""
+    """Reset password admin ke password acak sekali pakai — is_first_login=true."""
     admin = crud_admin.get(db, id)
     if not admin:
         raise HTTPException(status_code=404, detail="Admin tidak ditemukan.")
-    from app.schemas.auth import get_default_password
     crud_admin.reset_to_default_password(db, db_obj=admin)
-    return StatusResponse(message=f"Password {admin.employee_id or admin.username} direset ke {get_default_password()} — wajib ganti saat login.")
+    temp_pwd = getattr(admin, "_temp_password", None)
+    response_body = {
+        "message": "Kata sandi admin berhasil direset. Pengguna wajib memperbarui kata sandi saat login berikutnya.",
+    }
+    if temp_pwd:
+        response_body["temp_password"] = temp_pwd
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+        response.headers["Pragma"] = "no-cache"
+    return response_body
 
 
 @router.get("/karyawan-sementara", response_model=ApiResponse[List[KaryawanSementaraResponse]])

@@ -178,7 +178,8 @@ def init_db(db: Session) -> None:
         logger.info("Default User Dept evaluator created: user_it (password via SEED_IT_PASSWORD / acak)")
 
     # 3b. Primary Superadmin 1526.08.26 / it-04@thaisummit.co.id — Employee ID immutable, portal both
-    # Login utama pakai Employee ID; email fallback 6 bulan. Password default Itsp@YYYY (is_first_login=true).
+    # Login utama pakai Employee ID; email fallback 6 bulan.
+    # Password awal WAJIB dari SEED_IT04_PASSWORD (min 12 karakter), tanpa fallback default.
     it04 = crud_admin.get_by_employee_id(db, "1526.08.26")
     # legacy one-time: baris lama terlanjur ITSP.1526.08.26 -> migrasi ke polos
     it04_legacy = crud_admin.get_by_employee_id(db, "ITSP.1526.08.26")
@@ -188,24 +189,32 @@ def init_db(db: Session) -> None:
     if it04_legacy and it04_email and it04_legacy.id == it04_email.id:
         it04 = it04_legacy
     if not it04 and not it04_email:
-        from app.schemas.auth import get_default_password as _gdp
-        it04_password = os.getenv("SEED_IT04_PASSWORD") or _gdp()
-        crud_admin.create(
-            db,
-            obj_in=AdminCreate(
-                employee_id="1526.08.26",
-                username="it-04",
-                name="IT Admin",
-                email="it-04@thaisummit.co.id",
-                password=it04_password,
-                role="admin",
-                department="IT",
-                portal_access="both",
-                is_active=True,
-                is_first_login=True,
-            ),
-        )
-        logger.info("Primary superadmin ensured: 1526.08.26 / it-04@thaisummit.co.id (role=admin, portal=both)")
+        it04_password = (os.getenv("SEED_IT04_PASSWORD") or "").strip()
+        if len(it04_password) < 12:
+            # Fail-fast untuk akun ini: tidak dibuat tanpa password kuat dari env.
+            # Tidak melempar exception agar seeding master data di bawah tetap berjalan,
+            # dan password tidak pernah ditulis ke log.
+            logger.error(
+                "SEED_IT04_PASSWORD wajib disetel (minimal 12 karakter) untuk membuat "
+                "superadmin utama; akun it-04 TIDAK dibuat."
+            )
+        else:
+            crud_admin.create(
+                db,
+                obj_in=AdminCreate(
+                    employee_id="1526.08.26",
+                    username="it-04",
+                    name="IT Admin",
+                    email="it-04@thaisummit.co.id",
+                    password=it04_password,
+                    role="admin",
+                    department="IT",
+                    portal_access="both",
+                    is_active=True,
+                    is_first_login=True,
+                ),
+            )
+            logger.info("Primary superadmin ensured: 1526.08.26 / it-04@thaisummit.co.id (role=admin, portal=both)")
     else:
         target = it04 or it04_email
         needs = []

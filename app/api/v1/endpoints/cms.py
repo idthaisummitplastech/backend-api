@@ -1,7 +1,9 @@
 import json
 import re
+import secrets
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_company as get_db, get_db as get_karir_db
@@ -22,9 +24,10 @@ from app.models.cms import (
 from app.models.auth import User, RecruitmentAdmin
 from app.schemas.cms import ContactSubmissionCreate, ContactSubmissionResponse
 from app.schemas.common import ApiResponse, StatusResponse
-from app.api.deps import get_current_admin, RoleChecker
+from app.api.deps import get_current_admin, RoleChecker, security_scheme
+from app.api.v1.endpoints.auth import require_internal_secret
 from app.core.middleware import limiter
-from app.core.security import get_password_hash, verify_password
+from app.core.security import get_password_hash, verify_password, create_access_token, verify_totp
 
 router = APIRouter()
 
@@ -55,7 +58,7 @@ def submit_contact_form(
 def reorder_nav_menus(
     payload: List[Dict[str, Any]],
     db: Session = Depends(get_db),
-    _admin=Depends(RoleChecker(["admin"])),
+    _admin=Depends(RoleChecker(["admin", "marketing"])),
 ):
     """Reorder navigation menu items."""
     for item in payload:
@@ -75,12 +78,16 @@ def reorder_nav_menus(
 # --- ADMIN MENUS (DINAMIS SIDEBAR & TOP NAV) ---
 @router.get("/admin-menus")
 def list_admin_menus(
+    request: Request,
     portal: Optional[str] = Query(None, description="perusahaan | karir | both"),
     location: Optional[str] = Query(None, description="admin_sidebar | admin_top"),
     role: Optional[str] = Query(None, description="filter by role, e.g. admin"),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
     db: Session = Depends(get_db),
+    karir_db: Session = Depends(get_karir_db),
 ):
-    """Public read for admin nav — filter by portal/location/role. is_active=true only."""
+    """Admin menus read — wajib autentikasi (internal secret atau JWT admin). is_active=true only."""
+    check_cms_model_access("admin-menus", request=request, db=karir_db, credentials=credentials)
     q = db.query(AdminMenu).filter(AdminMenu.is_active == True)  # noqa: E712
     if portal:
         q = q.filter((AdminMenu.portal == portal) | (AdminMenu.portal == "both"))
@@ -118,9 +125,19 @@ def reorder_admin_menus(
 # --- DASHBOARD STATS FOR WEB PERUSAHAAN ---
 @router.get("/dashboard-stats")
 def get_dashboard_stats(
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """Retrieve summarized statistics for CMS Admin Dashboard."""
+    require_internal_secret(request)
+
+    admin_role = (request.headers.get("x-admin-role") or request.headers.get("X-Admin-Role") or "").lower()
+    if admin_role not in ["admin", "superadmin", "marketing"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak. Wewenang peran admin atau marketing diperlukan.",
+        )
+
     product_count = db.query(Product).count()
     cert_count = db.query(Certification).count()
     facility_count = db.query(Facility).count()
@@ -130,22 +147,25 @@ def get_dashboard_stats(
     contact_count = db.query(ContactSubmission).count()
     unread_contacts = db.query(ContactSubmission).filter(ContactSubmission.is_read == False).count()
     user_count = db.query(User).count()
-    recent_contacts_raw = (
-        db.query(ContactSubmission)
-        .order_by(ContactSubmission.created_at.desc())
-        .limit(5)
-        .all()
-    )
+
+    # CAND-CMS-DASH-01: Daftar rincian kontak terbaru (nama, email, subjek) hanya untuk role admin
     recent_contacts = []
-    for c in recent_contacts_raw:
-        recent_contacts.append({
-            "id": c.id,
-            "name": c.name,
-            "email": c.email,
-            "subject": c.subject,
-            "created_at": c.created_at.isoformat() if c.created_at else "",
-            "is_read": c.is_read,
-        })
+    if admin_role in ["admin", "superadmin"]:
+        recent_contacts_raw = (
+            db.query(ContactSubmission)
+            .order_by(ContactSubmission.created_at.desc())
+            .limit(5)
+            .all()
+        )
+        for c in recent_contacts_raw:
+            recent_contacts.append({
+                "id": c.id,
+                "name": c.name,
+                "email": c.email,
+                "subject": c.subject,
+                "created_at": c.created_at.isoformat() if c.created_at else "",
+                "is_read": c.is_read,
+            })
 
     return ApiResponse(data={
         "product_count": product_count,
@@ -165,9 +185,12 @@ def get_dashboard_stats(
 @router.get("/profile")
 def get_cms_profile(
     user_id: int = Query(...),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     """Fetch CMS user profile."""
+    if request:
+        require_internal_secret(request)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
@@ -193,10 +216,13 @@ def get_cms_profile(
 @router.post("/profile")
 def update_cms_profile(
     payload: Dict[str, Any],
+    request: Request = None,
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
 ):
     """Update CMS user profile, password, or MFA."""
+    if request:
+        require_internal_secret(request)
     user_id = payload.get("user_id") or payload.get("userId")
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID wajib disertakan.")
@@ -228,24 +254,58 @@ def update_cms_profile(
             raise HTTPException(status_code=400, detail="Kata sandi saat ini dan baru wajib diisi.")
         if not verify_password(current_password, user.password):
             raise HTTPException(status_code=400, detail="Kata sandi saat ini tidak sesuai.")
-        if len(new_password) < 6:
-            raise HTTPException(status_code=400, detail="Kata sandi baru minimal 6 karakter.")
+        if len(new_password) < 12:
+            raise HTTPException(status_code=400, detail="Kata sandi baru minimal 12 karakter.")
 
         hashed = get_password_hash(new_password)
         user.password = hashed
+        user.is_first_login = False
         db.commit()
 
         # Sync to recruitment_admins if exists
         rec_admin = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email == user.email).first()
         if rec_admin:
             rec_admin.password = hashed
+            rec_admin.is_first_login = False
             karir_db.commit()
 
-        return ApiResponse(message="Kata sandi berhasil diubah.")
+        # Terbitkan token penuh baru jika MFA sudah aktif
+        new_token = None
+        if user.mfa_enabled:
+            new_token = create_access_token(
+                subject=str(user.id),
+                role=user.role,
+                department=getattr(user, "department", None),
+                extra_claims={"email": user.email, "name": user.name, "employee_id": getattr(user, "employee_id", None), "type": "cms"},
+            )
+
+        resp_data = {"token": new_token} if new_token else None
+        return ApiResponse(data=resp_data, message="Kata sandi berhasil diubah.")
 
     elif action == "toggle_mfa":
         enabled = payload.get("enabled")
         new_status = bool(enabled) if enabled is not None else not user.mfa_enabled
+        admin_roles = ["admin", "hr", "user_dept", "marketing"]
+
+        # Admin, HR, User Dept, Marketing wajib MFA — tidak boleh dinonaktifkan
+        if not new_status and user.role in admin_roles:
+            raise HTTPException(
+                status_code=400,
+                detail="MFA wajib aktif untuk akun administrator dan tidak dapat dinonaktifkan.",
+            )
+
+        # Mematikan MFA untuk akun lain wajib memverifikasi password atau kode TOTP
+        if not new_status and user.mfa_enabled:
+            current_pw = str(payload.get("current_password") or payload.get("currentPassword", "")).strip()
+            totp_code = str(payload.get("code") or payload.get("totp_code", "")).strip()
+            pw_ok = current_pw and verify_password(current_pw, user.password)
+            totp_ok = totp_code and user.mfa_secret and verify_totp(user.mfa_secret, totp_code)
+            if not (pw_ok or totp_ok):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Mematikan MFA memerlukan verifikasi kata sandi atau kode TOTP yang valid.",
+                )
+
         user.mfa_enabled = new_status
         if payload.get("mfa_secret") or payload.get("mfaSecret"):
             user.mfa_secret = payload.get("mfa_secret") or payload.get("mfaSecret")
@@ -253,15 +313,188 @@ def update_cms_profile(
             bc = payload.get("backup_codes") or payload.get("backupCodes")
             user.backup_codes = bc if isinstance(bc, str) else json.dumps(bc)
         db.commit()
-        return ApiResponse(data={"mfa_enabled": new_status}, message="Status MFA berhasil diperbarui.")
+
+        # Sync to recruitment_admins if exists
+        rec_admin = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email == user.email).first()
+        if rec_admin:
+            rec_admin.is_mfa_enabled = new_status
+            if user.mfa_secret:
+                rec_admin.mfa_secret = user.mfa_secret
+            karir_db.commit()
+
+        # Terbitkan token penuh baru jika MFA baru saja diaktifkan dan password sudah diganti
+        new_token = None
+        if new_status and not getattr(user, "is_first_login", False):
+            new_token = create_access_token(
+                subject=str(user.id),
+                role=user.role,
+                department=getattr(user, "department", None),
+                extra_claims={"email": user.email, "name": user.name, "employee_id": getattr(user, "employee_id", None), "type": "cms"},
+            )
+
+        return ApiResponse(
+            data={"mfa_enabled": new_status, "token": new_token},
+            message="Status MFA berhasil diperbarui.",
+        )
 
     raise HTTPException(status_code=400, detail="Aksi tidak valid.")
+
+
+
+# Kolom rahasia yang DILARANG KERAS dikembalikan oleh serializer publik / dinamis
+SENSITIVE_MODEL_COLUMNS: Dict[str, Any] = {
+    "users": {"password", "mfa_secret", "backup_codes"},
+}
+
+
+def serialize_cms_record(
+    model: str,
+    item: Any,
+    rec_admin_map: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Serialisasi entitas ORM menjadi dictionary dengan blacklist ketat kolom rahasia.
+    Memastikan kredensial seperti hash password, mfa_secret, dan backup_codes
+    tidak pernah bocor pada respons GET list maupun GET single item.
+    """
+    sensitive_cols = SENSITIVE_MODEL_COLUMNS.get(model.lower(), set())
+    d = {
+        c.name: getattr(item, c.name)
+        for c in item.__table__.columns
+        if c.name not in sensitive_cols
+    }
+
+    if model.lower() == "users":
+        em = (d.get("email") or "").lower()
+        ra = (rec_admin_map or {}).get(em) if rec_admin_map else None
+        dept_default = {
+            "hr": "Human Capital",
+            "user_dept": "Engineering",
+            "admin": "IT & Systems",
+            "marketing": "Marketing",
+        }.get(d.get("role"), "General Management")
+        d["username"] = getattr(item, "username", None) or (ra.username if (ra and ra.username) else None) or em.split("@")[0]
+        d["department"] = getattr(item, "department", None) or (ra.department if (ra and ra.department) else None) or dept_default
+        d["is_mfa_enabled"] = bool(d.get("mfa_enabled") or (ra and ra.is_mfa_enabled))
+        d["isMfaEnabled"] = d["is_mfa_enabled"]
+        d["is_active"] = bool(d.get("is_active", True) if d.get("is_active") is not None else True)
+        d["portal_access"] = (d.get("portal_access") or (getattr(ra, "portal_access", None) if ra else None) or "both")
+        d["portalAccess"] = d["portal_access"]
+        d["isActive"] = d["is_active"]
+
+    return d
+
+
+# Daftar model CMS yang dapat dibaca secara publik oleh situs utama
+PUBLIC_GET_MODELS = {
+    "hero-sections",
+    "nav-menus",
+    "announcements",
+    "partners",
+    "features",
+    "services",
+    "products",
+    "blog-posts",
+    "testimonials",
+    "faqs",
+    "statistics",
+    "certifications",
+    "facilities",
+    "sustainability-reports",
+    "pages",
+    "settings",
+}
+
+# Model konten CMS yang dapat ditulis oleh peran admin dan marketing (16 model)
+CMS_CONTENT_MODELS = {
+    "settings",
+    "nav-menus",
+    "hero-sections",
+    "announcements",
+    "partners",
+    "features",
+    "services",
+    "products",
+    "blog-posts",
+    "testimonials",
+    "faqs",
+    "statistics",
+    "certifications",
+    "facilities",
+    "sustainability-reports",
+    "pages",
+}
+
+# Model sensitif yang wajib diotentikasi dan hanya boleh dikelola oleh peran admin
+SENSITIVE_MODELS = {
+    "users",
+    "contacts",
+    "admin-menus",
+}
+SENSITIVE_GET_MODELS = SENSITIVE_MODELS
+
+
+def check_cms_write_access(model: str, admin: RecruitmentAdmin) -> None:
+    """
+    Validasi otorisasi tulis (POST/PUT/DELETE) model CMS:
+    - Model sensitif (users, contacts, admin-menus) HANYA untuk role 'admin' / 'superadmin'.
+    - Model konten (CMS_CONTENT_MODELS) diizinkan untuk role 'admin' dan 'marketing'.
+    - Model di luar registri ditolak (403) jika bukan admin.
+    """
+    m = model.lower()
+    role = (admin.role or "").lower()
+    if m in SENSITIVE_MODELS:
+        if role not in ("admin", "superadmin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Akses ditolak. Model '{model}' hanya dapat dikelola oleh Administrator.",
+            )
+    elif m in CMS_CONTENT_MODELS:
+        if role not in ("admin", "superadmin", "marketing"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Akses ditolak. Model '{model}' memerlukan wewenang admin atau marketing.",
+            )
+    else:
+        if role not in ("admin", "superadmin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Akses ditolak.",
+            )
+
+
+def check_cms_model_access(
+    model: str,
+    request: Request,
+    db: Session,
+    credentials: Optional[HTTPAuthorizationCredentials] = None,
+) -> Optional[RecruitmentAdmin]:
+    """
+    Periksa hak akses pembacaan model CMS:
+    - Model dalam PUBLIC_GET_MODELS diizinkan tanpa autentikasi.
+    - Model sensitif (users, contacts, admin-menus) dan model baru (default-deny) WAJIB autentikasi.
+    - Model 'users' hanya diizinkan untuk peran 'admin'.
+    """
+    m = model.lower()
+    if m in PUBLIC_GET_MODELS:
+        return None
+
+    # Default-deny: wajib autentikasi (X-Internal-Secret dengan X-Admin-Role / X-Admin-Id atau Bearer JWT)
+    admin = get_current_admin(request=request, credentials=credentials, db=db)
+    if m == "users" and admin.role not in ("admin", "superadmin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak. Model 'users' hanya dapat diakses oleh peran admin.",
+        )
+    return admin
 
 
 # --- DYNAMIC CMS CRUD FOR WEB PERUSAHAAN ---
 @router.get("/{model}")
 def get_cms_items(
     model: str,
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
 ):
@@ -274,6 +507,9 @@ def get_cms_items(
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
+
+    # Proteksi akses model sensitif & default-deny untuk model baru
+    check_cms_model_access(model, request=request, db=karir_db, credentials=credentials)
 
     # Bidirectional synchronization for users between web_perusahaan and web_karir
     if model == "users":
@@ -412,34 +648,7 @@ def get_cms_items(
         except Exception:
             pass
 
-    results = []
-    for item in items:
-        d = {c.name: getattr(item, c.name) for c in item.__table__.columns}
-        if model == "users":
-            if "password" in d:
-                d["password"] = "******"
-            em = (d.get("email") or "").lower()
-            ra = rec_admin_map.get(em)
-            dept_default = {
-                "hr": "Human Capital",
-                "user_dept": "Engineering",
-                "admin": "IT & Systems",
-                "marketing": "Marketing",
-            }.get(d.get("role"), "General Management")
-            d["username"] = getattr(item, "username", None) or (ra.username if (ra and ra.username) else None) or em.split("@")[0]
-            d["department"] = getattr(item, "department", None) or (ra.department if (ra and ra.department) else None) or dept_default
-            d["is_mfa_enabled"] = bool(d.get("mfa_enabled") or (ra and ra.is_mfa_enabled))
-            d["isMfaEnabled"] = d["is_mfa_enabled"]
-            # expose is_active & portal_access with fallback
-            d["is_active"] = bool(d.get("is_active", True) if d.get("is_active") is not None else True)
-            if ra and hasattr(ra, "is_active"):
-                # prefer DB truth (already synced)
-                pass
-            d["portal_access"] = (d.get("portal_access") or (getattr(ra, "portal_access", None) if ra else None) or "both")
-            d["portalAccess"] = d["portal_access"]
-            d["isActive"] = d["is_active"]
-        results.append(d)
-
+    results = [serialize_cms_record(model, item, rec_admin_map) for item in items]
     return ApiResponse(data=results)
 
 
@@ -447,18 +656,30 @@ def get_cms_items(
 def get_cms_item_by_id(
     model: str,
     id: int,
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
     db: Session = Depends(get_db),
+    karir_db: Session = Depends(get_karir_db),
 ):
     """Retrieve single CMS record by ID."""
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
 
+    check_cms_model_access(model, request=request, db=karir_db, credentials=credentials)
+
     item = crud.get(db, id)
     if not item:
         raise HTTPException(status_code=404, detail=f"Data {model} dengan ID {id} tidak ditemukan.")
 
-    item_dict = {c.name: getattr(item, c.name) for c in item.__table__.columns}
+    rec_admin_map = {}
+    if model.lower() == "users":
+        try:
+            rec_admin_map = {ra.email.lower(): ra for ra in karir_db.query(RecruitmentAdmin).all() if ra.email}
+        except Exception:
+            pass
+
+    item_dict = serialize_cms_record(model, item, rec_admin_map)
     return ApiResponse(data=item_dict)
 
 
@@ -466,11 +687,14 @@ def get_cms_item_by_id(
 def create_cms_item(
     model: str,
     payload: Dict[str, Any],
+    response: Response,
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
-    _admin=Depends(RoleChecker(["admin"])),
+    current_admin: RecruitmentAdmin = Depends(get_current_admin),
 ):
-    """Create dynamic CMS record (Admin only)."""
+    """Create dynamic CMS record (Admin or Marketing depending on model)."""
+    check_cms_write_access(model, current_admin)
+    generated_temp_pwd: Optional[str] = None
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
@@ -542,7 +766,28 @@ def create_cms_item(
         user_email = (normalized_data.get("email") or "").strip().lower()
         if not user_email:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email wajib diisi.")
-        
+
+        pwd = normalized_data.get("password")
+        generated_temp_pwd = None
+        if not pwd or not str(pwd).strip():
+            # C.5: Jika password kosong, terbitkan kata sandi acak sementara sekali pakai (min 16 karakter)
+            generated_temp_pwd = secrets.token_urlsafe(16)
+            normalized_data["password"] = get_password_hash(generated_temp_pwd)
+            normalized_data["is_first_login"] = True
+        else:
+            pwd_str = str(pwd).strip()
+            if pwd_str.startswith("$2b$") or pwd_str.startswith("$2a$"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Password harus berupa teks polos, hash password tidak diperkenankan.",
+                )
+            if len(pwd_str) < 12:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Kata sandi minimal terdiri dari 12 karakter.",
+                )
+            normalized_data["password"] = get_password_hash(pwd_str)
+
         # Check duplicate in Company Profile DB
         existing_user = db.query(User).filter(User.email.ilike(user_email)).first()
         if existing_user:
@@ -572,10 +817,6 @@ def create_cms_item(
         if pa not in ("perusahaan","karir","both"):
             pa = "both"
         normalized_data["portal_access"] = pa
-
-        pwd = normalized_data.get("password")
-        if pwd and not str(pwd).startswith("$2b$"):
-            normalized_data["password"] = get_password_hash(str(pwd))
         if "backup_codes" in normalized_data and not isinstance(normalized_data["backup_codes"], str):
             normalized_data["backup_codes"] = json.dumps(normalized_data["backup_codes"])
 
@@ -643,11 +884,15 @@ def create_cms_item(
         except Exception:
             karir_db.rollback()
 
-    item_dict = {c.name: getattr(new_item, c.name) for c in new_item.__table__.columns}
-    if "password" in item_dict:
-        item_dict["password"] = "******"
-
-    return ApiResponse(data=item_dict, message=f"Data {model} berhasil ditambahkan.")
+    item_dict = serialize_cms_record(model, new_item)
+    if generated_temp_pwd and response:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+        response.headers["Pragma"] = "no-cache"
+    return ApiResponse(
+        data=item_dict,
+        message=f"Data {model} berhasil ditambahkan.",
+        temp_password=generated_temp_pwd,
+    )
 
 
 @router.put("/{model}/{id}")
@@ -657,9 +902,11 @@ def update_cms_item(
     payload: Dict[str, Any],
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
-    _admin=Depends(RoleChecker(["admin"])),
+    current_admin: RecruitmentAdmin = Depends(get_current_admin),
 ):
-    """Update dynamic CMS record (Admin only)."""
+    """Update dynamic CMS record (Admin or Marketing depending on model)."""
+    check_cms_write_access(model, current_admin)
+    generated_temp_pwd: Optional[str] = None
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")
@@ -679,10 +926,18 @@ def update_cms_item(
         old_email = getattr(item, "email", None)
         pwd = normalized_data.get("password") or normalized_data.get("new_password")
         if pwd and str(pwd).strip():
-            if not str(pwd).startswith("$2b$"):
-                normalized_data["password"] = get_password_hash(str(pwd).strip())
-            else:
-                normalized_data["password"] = str(pwd).strip()
+            pwd_str = str(pwd).strip()
+            if pwd_str.startswith("$2b$") or pwd_str.startswith("$2a$"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Password harus berupa teks polos, hash password tidak diperkenankan.",
+                )
+            if len(pwd_str) < 12:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Kata sandi minimal terdiri dari 12 karakter.",
+                )
+            normalized_data["password"] = get_password_hash(pwd_str)
 
         if "backup_codes" in normalized_data and not isinstance(normalized_data["backup_codes"], str):
             normalized_data["backup_codes"] = json.dumps(normalized_data["backup_codes"])
@@ -759,10 +1014,7 @@ def update_cms_item(
     clean_data = {k: v for k, v in normalized_data.items() if hasattr(crud.model, k) and k not in ["id", "created_at", "updated_at"]}
     updated = crud.update(db, db_obj=item, obj_in=clean_data)
 
-    item_dict = {c.name: getattr(updated, c.name) for c in updated.__table__.columns}
-    if "password" in item_dict:
-        item_dict["password"] = "******"
-
+    item_dict = serialize_cms_record(model, updated)
     return ApiResponse(data=item_dict, message=f"Data {model} berhasil diperbarui.")
 
 
@@ -772,9 +1024,11 @@ def delete_cms_item(
     id: int,
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
-    _admin=Depends(RoleChecker(["admin"])),
+    current_admin: RecruitmentAdmin = Depends(get_current_admin),
 ):
-    """Delete dynamic CMS record (Admin only)."""
+    """Delete dynamic CMS record (Admin or Marketing depending on model)."""
+    check_cms_write_access(model, current_admin)
+    generated_temp_pwd: Optional[str] = None
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
         raise HTTPException(status_code=404, detail=f"Model CMS '{model}' tidak ditemukan.")

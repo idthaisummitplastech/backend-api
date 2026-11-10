@@ -1,11 +1,17 @@
+import secrets
 from datetime import datetime, timezone
 from typing import Optional
 from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field
 
 
-def get_default_password() -> str:
-    """Dynamic default password Itsp@YYYY — YYYY = current year, hash only on create/reset."""
-    return f"Itsp@{datetime.now(timezone.utc).year}"
+def generate_temp_password(length: int = 16) -> str:
+    """Generate a cryptographically secure random one-time password.
+
+    Used for new admin/user accounts and password resets.
+    The generated password is returned ONCE to the calling admin
+    and never logged or stored in plaintext.
+    """
+    return secrets.token_urlsafe(length)
 
 
 class Token(BaseModel):
@@ -77,8 +83,8 @@ class AdminBase(BaseModel):
 
 
 class AdminCreate(AdminBase):
-    # password optional — jika kosong pakai Itsp@YYYY
-    password: Optional[str] = Field(None, min_length=6)
+    # password optional — jika kosong, CRUD generates secure random temp password
+    password: Optional[str] = Field(None, min_length=12)
 
 
 class AdminUpdate(BaseModel):
@@ -87,7 +93,7 @@ class AdminUpdate(BaseModel):
     email: Optional[EmailStr] = None
     role: Optional[str] = None
     department: Optional[str] = None
-    password: Optional[str] = Field(None, min_length=6)
+    password: Optional[str] = Field(None, min_length=12)
     is_active: Optional[bool] = None
     portal_access: Optional[str] = None
     is_first_login: Optional[bool] = None
