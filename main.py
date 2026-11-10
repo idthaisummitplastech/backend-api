@@ -28,14 +28,15 @@ async def lifespan(app: FastAPI):
     """Application startup & shutdown events."""
     logger.info("Starting PT ITSP Enterprise Core Backend API...")
     
-    # Auto-seed database tables and initial superadmin on boot
-    db = SessionLocal()
-    try:
-        init_db(db)
-    except Exception as e:
-        logger.error(f"Failed to auto-init database: {e}")
-    finally:
-        db.close()
+    # Auto-seed database tables and initial superadmin on boot (dilewati saat test environment)
+    if settings.ENVIRONMENT != "test":
+        db = SessionLocal()
+        try:
+            init_db(db)
+        except Exception as e:
+            logger.error(f"Failed to auto-init database: {e}")
+        finally:
+            db.close()
 
     yield
     logger.info("Shutting down PT ITSP Enterprise Core Backend API...")
