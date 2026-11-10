@@ -275,7 +275,7 @@ def test_content_models_parity_with_nextjs_whitelist():
 
 def test_sensitive_admin_menus_allows_jwt():
     """Verify 'admin-menus' model allows request with valid JWT Bearer token."""
-    token = create_access_token(subject=1, role="hr")
+    token = create_access_token(subject=1, role="hr", extra_claims={"type": "ats"})
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
     mock_request = MagicMock()
     mock_request.headers.get.return_value = None
@@ -296,7 +296,7 @@ def test_sensitive_admin_menus_allows_jwt():
 
 def test_sensitive_users_rejects_non_admin_role():
     """Verify 'users' model rejects non-admin JWT (e.g. hr/marketing) with 403."""
-    token = create_access_token(subject=2, role="marketing")
+    token = create_access_token(subject=2, role="marketing", extra_claims={"type": "ats"})
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
     mock_request = MagicMock()
     mock_request.headers.get.return_value = None
@@ -318,7 +318,7 @@ def test_sensitive_users_rejects_non_admin_role():
 
 def test_sensitive_users_allows_admin_role():
     """Verify 'users' model permits admin JWT."""
-    token = create_access_token(subject=1, role="admin")
+    token = create_access_token(subject=1, role="admin", extra_claims={"type": "ats"})
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
     mock_request = MagicMock()
     mock_request.headers.get.return_value = None

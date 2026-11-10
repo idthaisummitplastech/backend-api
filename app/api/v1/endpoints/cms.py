@@ -255,7 +255,7 @@ def update_cms_profile(
                 subject=str(user.id),
                 role=user.role,
                 department=getattr(user, "department", None),
-                extra_claims={"email": user.email, "name": user.name, "employee_id": getattr(user, "employee_id", None)},
+                extra_claims={"email": user.email, "name": user.name, "employee_id": getattr(user, "employee_id", None), "type": "cms"},
             )
 
         resp_data = {"token": new_token} if new_token else None
@@ -308,7 +308,7 @@ def update_cms_profile(
                 subject=str(user.id),
                 role=user.role,
                 department=getattr(user, "department", None),
-                extra_claims={"email": user.email, "name": user.name, "employee_id": getattr(user, "employee_id", None)},
+                extra_claims={"email": user.email, "name": user.name, "employee_id": getattr(user, "employee_id", None), "type": "cms"},
             )
 
         return ApiResponse(

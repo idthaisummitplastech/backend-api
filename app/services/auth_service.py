@@ -80,7 +80,7 @@ class AuthService:
             subject=admin.id,
             role=admin.role,
             department=admin.department,
-            extra_claims={"name": admin.name, "email": admin.email, "type": "admin", "employee_id": getattr(admin, "employee_id", None)},
+            extra_claims={"name": admin.name, "email": admin.email, "type": "ats", "employee_id": getattr(admin, "employee_id", None)},
             scope=token_scope,
         )
         return Token(

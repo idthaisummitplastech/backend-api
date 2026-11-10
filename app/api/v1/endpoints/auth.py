@@ -101,7 +101,12 @@ def login_cms_user(
         subject=str(user.id),
         role=user.role,
         department=getattr(user, "department", None),
-        extra_claims={"email": user.email, "name": user.name, "employee_id": getattr(user, "employee_id", None)},
+        extra_claims={
+            "email": user.email,
+            "name": user.name,
+            "employee_id": getattr(user, "employee_id", None),
+            "type": "cms",
+        },
         scope=token_scope,
     )
     has_secret = bool(user.mfa_secret)
@@ -356,7 +361,7 @@ def login_ats_admin(
                 subject=str(admin_id),
                 role=admin_role,
                 department=admin_dept,
-                extra_claims={"email": cms_user.email, "name": admin_name},
+                extra_claims={"email": cms_user.email, "name": admin_name, "type": "ats"},
                 scope=token_scope,
             )
 
@@ -471,7 +476,7 @@ def login_ats_admin(
             subject=str(local_admin.id),
             role=local_admin.role,
             department=local_admin.department,
-            extra_claims={"email": local_admin.email, "name": local_admin.name},
+            extra_claims={"email": local_admin.email, "name": local_admin.name, "type": "ats"},
             scope=token_scope,
         )
 

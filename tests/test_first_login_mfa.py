@@ -38,6 +38,7 @@ def test_saklar_enforce_disabled_allows_operational_endpoint():
             subject=1,
             role="admin",
             scope="first_login_setup",
+            extra_claims={"type": "ats"},
         )
         credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
         mock_request = MagicMock()
@@ -82,6 +83,7 @@ def test_saklar_enforce_enabled_rejects_operational_endpoints():
             subject=1,
             role="admin",
             scope="first_login_setup",
+            extra_claims={"type": "ats"},
         )
         credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 
@@ -113,6 +115,7 @@ def test_scoped_token_allowed_on_setup_endpoints():
             subject=1,
             role="admin",
             scope="first_login_setup",
+            extra_claims={"type": "ats"},
         )
         credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 
