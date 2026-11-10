@@ -11,6 +11,7 @@ from app.models.recruitment import Applicant, KaryawanSementara
 from app.schemas.recruitment import ApplicantCreate, ApplicantResponse
 from app.schemas.common import ApiResponse, StatusResponse
 from app.api.deps import get_current_admin, get_current_applicant, RoleChecker
+from app.api.v1.endpoints.auth import require_internal_secret
 from app.core.middleware import limiter
 from app.core.security import get_password_hash
 from app.services.recruitment_service import recruitment_service
@@ -265,22 +266,49 @@ def apply_job(
     }
 
 
+# CAND-APPL-01: Whitelist konfigurasi publik untuk pelamar (buang konfigurasi master/internal)
+SAFE_APPLICANT_SETTINGS = {
+    "mcu_partner_name",
+    "mcu_partner_address",
+    "mcu_estimated_cost",
+    "mcu_instructions",
+    "mcu_partner_maps",
+    "plant_address_karawang",
+    "plant_address_cikarang",
+}
+
+
 @router.get("/status/{applicant_id}")
 def get_applicant_status_details(
     applicant_id: str,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """
     Candidate live recruitment status tracker with settings & sanitized submission data.
-    Supports either integer applicant_id or applicant email string.
+    Requires internal secret and enforces applicant identity ownership.
     """
+    require_internal_secret(request)
+
     applicant = crud_applicant.get_with_details_by_identifier(db, applicant_id)
     if not applicant:
         raise HTTPException(status_code=404, detail="Data pelamar tidak ditemukan.")
 
-    # Master settings
+    # CAND-APPL-01: Verifikasi kepemilikan data bila dipanggil dari sesi pelamar
+    x_app_id = request.headers.get("x-applicant-id") or request.headers.get("X-Applicant-Id")
+    if x_app_id:
+        try:
+            if applicant.id != int(x_app_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Akses ditolak. Pelamar tidak berhak mengakses data pelamar lain.",
+                )
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Header X-Applicant-Id tidak valid.")
+
+    # Master settings — CAND-APPL-01: Hanya sertakan subset aman, buang konfigurasi master sensitif
     settings_list = crud_setting.get_multi(db, limit=100)
-    settings_map = {s.key: s.value for s in settings_list}
+    settings_map = {s.key: s.value for s in settings_list if s.key in SAFE_APPLICANT_SETTINGS}
 
     # Sanitize submissions (privacy: score masked unless show_score is true)
     sanitized_subs = []
@@ -362,7 +390,7 @@ def get_applicant_status_details(
             "failed_at_stage": applicant.failed_at_stage,
             "rejectionReason": applicant.rejection_reason,
             "rejection_reason": applicant.rejection_reason,
-            "screeningNotes": applicant.screening_notes,
+            # CAND-APPL-01: screeningNotes adalah catatan evaluasi internal HR, dibuang dari respons pelamar
             "psikotesScheduledAt": applicant.psikotes_scheduled_at,
             "psikotesLocation": applicant.psikotes_location or "Portal Karir Online PT ITSP",
             "psikotesMapsUrl": applicant.psikotes_maps_url,
@@ -409,13 +437,33 @@ def get_applicant_status_details(
 @router.post("/accept-offer")
 def candidate_accept_offer(
     payload: Dict[str, Any],
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """
     Candidate acceptance of formal Job Offer (Stage 7).
     Generates temporary NIK and establishes KaryawanSementara record.
+    Requires internal secret and validates applicant session ownership.
     """
-    applicant_id = int(payload.get("applicant_id") or payload.get("applicantId") or 0)
+    require_internal_secret(request)
+
+    x_app_id = request.headers.get("x-applicant-id") or request.headers.get("X-Applicant-Id")
+    payload_app_id = int(payload.get("applicant_id") or payload.get("applicantId") or 0)
+
+    if x_app_id:
+        try:
+            session_app_id = int(x_app_id)
+            if payload_app_id and payload_app_id != session_app_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Akses ditolak. ID pelamar tidak sesuai dengan sesi login.",
+                )
+            applicant_id = session_app_id
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Header X-Applicant-Id tidak valid.")
+    else:
+        applicant_id = payload_app_id
+
     if not applicant_id:
         raise HTTPException(status_code=400, detail="ID Pelamar wajib disertakan.")
 
