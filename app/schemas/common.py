@@ -9,6 +9,7 @@ class ApiResponse(BaseModel, Generic[T]):
     success: bool = True
     message: Optional[str] = None
     data: Optional[T] = None
+    temp_password: Optional[str] = None
 
 
 class PaginatedResponse(BaseModel, Generic[T]):

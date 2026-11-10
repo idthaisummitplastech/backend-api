@@ -227,6 +227,7 @@ def test_user_password_length_and_hash_rejection():
         create_cms_item(
             model="users",
             payload={"name": "Test", "email": "test@itsp.co.id", "password": "short_pw"},
+            response=MagicMock(),
             db=mock_db,
             karir_db=mock_karir_db,
             current_admin=admin_user,
@@ -239,6 +240,7 @@ def test_user_password_length_and_hash_rejection():
         create_cms_item(
             model="users",
             payload={"name": "Test", "email": "test@itsp.co.id", "password": "$2b$12$e8r6...rawhash"},
+            response=MagicMock(),
             db=mock_db,
             karir_db=mock_karir_db,
             current_admin=admin_user,

@@ -21,11 +21,11 @@ def test_cms_profile_rejects_missing_internal_secret():
     req_no_auth = make_request({})
 
     with pytest.raises(HTTPException) as exc1:
-        get_cms_profile(req_no_auth, user_id=1, db=db)
+        get_cms_profile(user_id=1, request=req_no_auth, db=db)
     assert exc1.value.status_code == 403
 
     with pytest.raises(HTTPException) as exc2:
-        update_cms_profile({"user_id": 1}, req_no_auth, db=db, karir_db=karir_db)
+        update_cms_profile({"user_id": 1}, request=req_no_auth, db=db, karir_db=karir_db)
     assert exc2.value.status_code == 403
 
 
@@ -43,7 +43,7 @@ def test_cms_profile_allows_internal_secret():
     db.query(User).filter().first.return_value = fake_user
 
     req = make_request({"X-Internal-Secret": settings.SECRET_KEY})
-    resp = get_cms_profile(req, user_id=1, db=db)
+    resp = get_cms_profile(user_id=1, request=req, db=db)
     data = resp.data
     assert data["id"] == 1
     assert data["name"] == "Admin Test"

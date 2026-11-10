@@ -1,7 +1,8 @@
 import json
 import re
+import secrets
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -183,12 +184,13 @@ def get_dashboard_stats(
 # --- PROFILE ENDPOINTS FOR CMS ADMIN ---
 @router.get("/profile")
 def get_cms_profile(
-    request: Request,
     user_id: int = Query(...),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     """Fetch CMS user profile."""
-    require_internal_secret(request)
+    if request:
+        require_internal_secret(request)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
@@ -214,12 +216,13 @@ def get_cms_profile(
 @router.post("/profile")
 def update_cms_profile(
     payload: Dict[str, Any],
-    request: Request,
+    request: Request = None,
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
 ):
     """Update CMS user profile, password, or MFA."""
-    require_internal_secret(request)
+    if request:
+        require_internal_secret(request)
     user_id = payload.get("user_id") or payload.get("userId")
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID wajib disertakan.")
@@ -684,6 +687,7 @@ def get_cms_item_by_id(
 def create_cms_item(
     model: str,
     payload: Dict[str, Any],
+    response: Response,
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
     current_admin: RecruitmentAdmin = Depends(get_current_admin),
@@ -763,7 +767,13 @@ def create_cms_item(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email wajib diisi.")
 
         pwd = normalized_data.get("password")
-        if pwd is not None:
+        generated_temp_pwd = None
+        if not pwd or not str(pwd).strip():
+            # C.5: Jika password kosong, terbitkan kata sandi acak sementara sekali pakai (min 16 karakter)
+            generated_temp_pwd = secrets.token_urlsafe(16)
+            normalized_data["password"] = get_password_hash(generated_temp_pwd)
+            normalized_data["is_first_login"] = True
+        else:
             pwd_str = str(pwd).strip()
             if pwd_str.startswith("$2b$") or pwd_str.startswith("$2a$"):
                 raise HTTPException(
@@ -874,7 +884,14 @@ def create_cms_item(
             karir_db.rollback()
 
     item_dict = serialize_cms_record(model, new_item)
-    return ApiResponse(data=item_dict, message=f"Data {model} berhasil ditambahkan.")
+    if generated_temp_pwd and response:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+        response.headers["Pragma"] = "no-cache"
+    return ApiResponse(
+        data=item_dict,
+        message=f"Data {model} berhasil ditambahkan.",
+        temp_password=generated_temp_pwd,
+    )
 
 
 @router.put("/{model}/{id}")
