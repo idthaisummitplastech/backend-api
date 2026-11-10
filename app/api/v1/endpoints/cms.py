@@ -24,6 +24,7 @@ from app.models.auth import User, RecruitmentAdmin
 from app.schemas.cms import ContactSubmissionCreate, ContactSubmissionResponse
 from app.schemas.common import ApiResponse, StatusResponse
 from app.api.deps import get_current_admin, RoleChecker, security_scheme
+from app.api.v1.endpoints.auth import require_internal_secret
 from app.core.middleware import limiter
 from app.core.security import get_password_hash, verify_password, create_access_token, verify_totp
 
@@ -123,9 +124,19 @@ def reorder_admin_menus(
 # --- DASHBOARD STATS FOR WEB PERUSAHAAN ---
 @router.get("/dashboard-stats")
 def get_dashboard_stats(
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """Retrieve summarized statistics for CMS Admin Dashboard."""
+    require_internal_secret(request)
+
+    admin_role = (request.headers.get("x-admin-role") or request.headers.get("X-Admin-Role") or "").lower()
+    if admin_role not in ["admin", "superadmin", "marketing"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak. Wewenang peran admin atau marketing diperlukan.",
+        )
+
     product_count = db.query(Product).count()
     cert_count = db.query(Certification).count()
     facility_count = db.query(Facility).count()
@@ -135,22 +146,25 @@ def get_dashboard_stats(
     contact_count = db.query(ContactSubmission).count()
     unread_contacts = db.query(ContactSubmission).filter(ContactSubmission.is_read == False).count()
     user_count = db.query(User).count()
-    recent_contacts_raw = (
-        db.query(ContactSubmission)
-        .order_by(ContactSubmission.created_at.desc())
-        .limit(5)
-        .all()
-    )
+
+    # CAND-CMS-DASH-01: Daftar rincian kontak terbaru (nama, email, subjek) hanya untuk role admin
     recent_contacts = []
-    for c in recent_contacts_raw:
-        recent_contacts.append({
-            "id": c.id,
-            "name": c.name,
-            "email": c.email,
-            "subject": c.subject,
-            "created_at": c.created_at.isoformat() if c.created_at else "",
-            "is_read": c.is_read,
-        })
+    if admin_role in ["admin", "superadmin"]:
+        recent_contacts_raw = (
+            db.query(ContactSubmission)
+            .order_by(ContactSubmission.created_at.desc())
+            .limit(5)
+            .all()
+        )
+        for c in recent_contacts_raw:
+            recent_contacts.append({
+                "id": c.id,
+                "name": c.name,
+                "email": c.email,
+                "subject": c.subject,
+                "created_at": c.created_at.isoformat() if c.created_at else "",
+                "is_read": c.is_read,
+            })
 
     return ApiResponse(data={
         "product_count": product_count,
@@ -169,10 +183,12 @@ def get_dashboard_stats(
 # --- PROFILE ENDPOINTS FOR CMS ADMIN ---
 @router.get("/profile")
 def get_cms_profile(
+    request: Request,
     user_id: int = Query(...),
     db: Session = Depends(get_db),
 ):
     """Fetch CMS user profile."""
+    require_internal_secret(request)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
@@ -198,10 +214,12 @@ def get_cms_profile(
 @router.post("/profile")
 def update_cms_profile(
     payload: Dict[str, Any],
+    request: Request,
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
 ):
     """Update CMS user profile, password, or MFA."""
+    require_internal_secret(request)
     user_id = payload.get("user_id") or payload.get("userId")
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID wajib disertakan.")
