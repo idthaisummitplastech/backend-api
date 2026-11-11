@@ -258,8 +258,12 @@ def update_cms_profile(
             raise HTTPException(status_code=400, detail="Kata sandi baru minimal 12 karakter.")
 
         hashed = get_password_hash(new_password)
+        now_utc = datetime.now(timezone.utc)
         user.password = hashed
         user.is_first_login = False
+        user.password_changed_at = now_utc
+        user.session_version = getattr(user, "session_version", 1) + 1
+        user.mfa_verified_at = None
         db.commit()
 
         # Sync to recruitment_admins if exists
@@ -267,6 +271,9 @@ def update_cms_profile(
         if rec_admin:
             rec_admin.password = hashed
             rec_admin.is_first_login = False
+            rec_admin.password_changed_at = now_utc
+            rec_admin.session_version = getattr(rec_admin, "session_version", 1) + 1
+            rec_admin.mfa_verified_at = None
             karir_db.commit()
 
         # Terbitkan token penuh baru jika MFA sudah aktif

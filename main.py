@@ -29,7 +29,8 @@ async def lifespan(app: FastAPI):
     logger.info("Starting PT ITSP Enterprise Core Backend API...")
     
     # Auto-seed database tables and initial superadmin on boot (dilewati saat test environment)
-    if settings.ENVIRONMENT != "test":
+    if str(getattr(settings, "ENVIRONMENT", "")).lower() not in ("test", "testing"):
+        from app.db.init_db import init_db
         db = SessionLocal()
         try:
             init_db(db)

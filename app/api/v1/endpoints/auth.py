@@ -1,6 +1,8 @@
 import json
 import secrets
 from typing import Any, Dict
+import time
+from datetime import datetime, timezone, timedelta
 import pyotp
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -16,7 +18,13 @@ from app.schemas.auth import (
 )
 from app.schemas.common import ApiResponse
 from app.services.auth_service import auth_service
-from app.api.deps import get_current_admin, get_current_applicant
+from app.api.deps import (
+    get_current_admin,
+    get_authenticated_admin_base,
+    get_current_applicant,
+    get_cms_user_base,
+    require_account_identity,
+)
 from app.models.auth import RecruitmentAdmin, User
 from app.models.recruitment import Applicant
 from app.core.middleware import limiter
@@ -609,12 +617,17 @@ def get_cms_user_mfa(
     user_id: int,
     request: Request,
     db: Session = Depends(get_db_company),
+    current_user: User = Depends(get_cms_user_base),
 ):
-    """Retrieve CMS user MFA configuration."""
+    """Retrieve CMS user MFA configuration. Identitas hanya dari X-CMS-User-Id/JWT CMS."""
     require_internal_secret(request)
-    user = db.query(User).filter(User.id == user_id).first()
+    if not isinstance(current_user, User):
+        user = db.query(User).filter(User.id == user_id).first()
+    else:
+        user = current_user
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+    require_account_identity(user, user_id)
 
     backup_codes_count = 0
     if user.backup_codes:
@@ -641,12 +654,17 @@ def save_cms_mfa_secret(
     payload: Dict[str, Any],
     request: Request,
     db: Session = Depends(get_db_company),
+    current_user: User = Depends(get_cms_user_base),
 ):
     """Save generated MFA secret for CMS user before activation."""
     require_internal_secret(request)
-    user = db.query(User).filter(User.id == user_id).first()
+    if not isinstance(current_user, User):
+        user = db.query(User).filter(User.id == user_id).first()
+    else:
+        user = current_user
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+    require_account_identity(user, user_id)
 
     if user.mfa_enabled:
         raise HTTPException(status_code=400, detail="MFA sudah aktif. Secret tidak dapat diubah.")
@@ -663,24 +681,31 @@ def activate_cms_mfa(
     payload: Dict[str, Any],
     request: Request,
     db: Session = Depends(get_db_company),
+    current_user: User = Depends(get_cms_user_base),
 ):
     """Activate MFA for CMS user after code verification."""
     require_internal_secret(request)
-    user_id = payload.get("user_id") or payload.get("userId")
-    if not user_id:
-        raise HTTPException(status_code=400, detail="User ID wajib disertakan.")
+    target_id_raw = payload.get("user_id") or payload.get("userId")
+    if not target_id_raw:
+        raise HTTPException(status_code=400, detail="ID pengguna (user_id) wajib disertakan.")
+
+    if not isinstance(current_user, User):
+        user = db.query(User).filter(User.id == int(target_id_raw)).first() if target_id_raw else None
+    else:
+        user = current_user
+    if not user:
+        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+    require_account_identity(user, target_id_raw)
 
     secret = payload.get("secret")
     backup_codes = payload.get("backup_codes") or payload.get("backupCodes")
 
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
-
     if user.mfa_enabled:
         raise HTTPException(status_code=400, detail="MFA sudah aktif pada akun ini.")
 
+    now_utc = datetime.now(timezone.utc)
     user.mfa_enabled = True
+    user.mfa_verified_at = now_utc
     if secret:
         user.mfa_secret = secret
     if backup_codes:
@@ -694,6 +719,7 @@ def activate_cms_mfa(
             rec_admin = karir_db.query(RecruitmentAdmin).filter(RecruitmentAdmin.email.ilike(user.email)).first()
             if rec_admin:
                 rec_admin.is_mfa_enabled = True
+                rec_admin.mfa_verified_at = now_utc
                 if secret:
                     rec_admin.mfa_secret = secret
                 karir_db.commit()
@@ -716,23 +742,39 @@ def verify_cms_mfa(
     payload: Dict[str, Any],
     request: Request,
     db: Session = Depends(get_db_company),
+    current_user: User = Depends(get_cms_user_base),
 ):
     """Verify MFA code or backup code for CMS user login."""
     require_internal_secret(request)
-    user_id = payload.get("user_id") or payload.get("userId")
-    if not user_id:
+    target_id_raw = payload.get("user_id") or payload.get("userId")
+    if not target_id_raw:
         raise HTTPException(status_code=400, detail="User ID wajib disertakan.")
 
-    code = str(payload.get("code", "")).strip().replace(" ", "")
-
-    user = db.query(User).filter(User.id == int(user_id)).first()
+    user = db.query(User).filter(User.id == int(target_id_raw)).first()
     if not user or not user.mfa_secret:
         raise HTTPException(status_code=400, detail="Konfigurasi MFA pengguna tidak valid.")
+    if isinstance(current_user, User) and current_user.id != 0:
+        require_account_identity(current_user, target_id_raw)
+
+    now_utc = datetime.now(timezone.utc)
+    if user.totp_locked_until:
+        locked_until = user.totp_locked_until if user.totp_locked_until.tzinfo else user.totp_locked_until.replace(tzinfo=timezone.utc)
+        if locked_until > now_utc:
+            remaining = int((locked_until - now_utc).total_seconds())
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Akun terkunci sementara karena terlalu banyak percobaan salah. Coba lagi dalam {remaining} detik.",
+            )
+
+    code = str(payload.get("code", "")).strip().replace(" ", "")
+    current_timestep = int(time.time() / 30)
+
+    # Anti-replay check
+    if getattr(user, "last_used_totp_timestep", None) == current_timestep:
+        raise HTTPException(status_code=400, detail="Kode TOTP telah digunakan. Tunggu kode berikutnya (30 detik).")
 
     totp = pyotp.TOTP(user.mfa_secret)
-    # Mengizinkan toleransi perbedaan waktu hingga ±15 menit (30 step x 30 detik)
-    # untuk mengatasi clock drift antara jam HP dan laptop/server.
-    is_valid = totp.verify(code, valid_window=30)
+    is_valid = totp.verify(code, valid_window=1)
     used_backup = False
 
     if not is_valid and user.backup_codes:
@@ -749,7 +791,18 @@ def verify_cms_mfa(
             pass
 
     if not is_valid:
+        user.totp_failed_attempts = getattr(user, "totp_failed_attempts", 0) + 1
+        if user.totp_failed_attempts >= 5:
+            user.totp_locked_until = now_utc + timedelta(minutes=15)
+        db.commit()
         raise HTTPException(status_code=400, detail="Kode autentikasi salah atau sudah kedaluwarsa.")
+
+    user.totp_failed_attempts = 0
+    user.totp_locked_until = None
+    if not used_backup:
+        user.last_used_totp_timestep = current_timestep
+    user.mfa_verified_at = now_utc
+    db.commit()
 
     return {
         "success": True,
@@ -770,12 +823,17 @@ def get_ats_admin_mfa_setup(
     request: Request,
     db: Session = Depends(get_db),
     db_company: Session = Depends(get_db_company),
+    current_admin: RecruitmentAdmin = Depends(get_authenticated_admin_base),
 ):
     """Retrieve or initialize MFA TOTP secret for ATS Admin."""
     require_internal_secret(request)
-    admin = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.id == admin_id).first()
+    if not isinstance(current_admin, RecruitmentAdmin):
+        admin = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.id == admin_id).first()
+    else:
+        admin = current_admin
     if not admin:
         raise HTTPException(status_code=404, detail="Admin rekrutmen tidak ditemukan.")
+    require_account_identity(admin, admin_id)
 
     if admin.is_mfa_enabled:
         raise HTTPException(status_code=400, detail="MFA sudah aktif. Setup ulang tidak diizinkan.")
@@ -808,19 +866,34 @@ def verify_ats_admin_mfa(
     request: Request,
     db: Session = Depends(get_db),
     db_company: Session = Depends(get_db_company),
+    current_admin: RecruitmentAdmin = Depends(get_authenticated_admin_base),
 ):
     """Activate or deactivate MFA for ATS admin."""
     require_internal_secret(request)
     admin_id = payload.get("admin_id") or payload.get("adminId")
-    if not admin_id:
+    if not admin_id and (not isinstance(current_admin, RecruitmentAdmin) or getattr(current_admin, "id", 0) == 0):
         raise HTTPException(status_code=400, detail="Admin ID wajib disertakan.")
+
+    if not isinstance(current_admin, RecruitmentAdmin):
+        admin = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.id == int(admin_id)).first() if admin_id else None
+    else:
+        admin = current_admin
+    if not admin:
+        raise HTTPException(status_code=404, detail="Admin tidak ditemukan.")
+    require_account_identity(admin, admin_id)
 
     code = str(payload.get("code", "")).strip().replace(" ", "")
     enable = bool(payload.get("enable"))
 
-    admin = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.id == int(admin_id)).first()
-    if not admin:
-        raise HTTPException(status_code=404, detail="Admin tidak ditemukan.")
+    now_utc = datetime.now(timezone.utc)
+    if admin.totp_locked_until:
+        locked_until = admin.totp_locked_until if admin.totp_locked_until.tzinfo else admin.totp_locked_until.replace(tzinfo=timezone.utc)
+        if locked_until > now_utc:
+            remaining = int((locked_until - now_utc).total_seconds())
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Akun terkunci sementara karena terlalu banyak percobaan salah. Coba lagi dalam {remaining} detik.",
+            )
 
     if enable:
         if admin.is_mfa_enabled:
@@ -828,20 +901,33 @@ def verify_ats_admin_mfa(
         if not admin.mfa_secret:
             raise HTTPException(status_code=400, detail="Secret MFA belum diinisialisasi.")
 
+        current_timestep = int(time.time() / 30)
+        if getattr(admin, "last_used_totp_timestep", None) == current_timestep:
+            raise HTTPException(status_code=400, detail="Kode TOTP telah digunakan. Tunggu kode berikutnya (30 detik).")
+
         totp = pyotp.TOTP(admin.mfa_secret)
-        if not totp.verify(code, valid_window=30):
+        if not totp.verify(code, valid_window=1):
+            admin.totp_failed_attempts = getattr(admin, "totp_failed_attempts", 0) + 1
+            if admin.totp_failed_attempts >= 5:
+                admin.totp_locked_until = now_utc + timedelta(minutes=15)
+            db.commit()
             raise HTTPException(
                 status_code=400,
-                detail="Kode verifikasi 6-digit tidak valid atau sudah kedaluwarsa. Pastikan jam HP dan laptop/server sudah sinkron (WIB UTC+7).",
+                detail="Kode verifikasi 6-digit tidak valid atau sudah kedaluwarsa.",
             )
 
+        admin.totp_failed_attempts = 0
+        admin.totp_locked_until = None
+        admin.last_used_totp_timestep = current_timestep
         admin.is_mfa_enabled = True
+        admin.mfa_verified_at = now_utc
         db.commit()
 
         cms_user = db_company.query(User).filter(User.email == admin.email).first()
         if cms_user:
             cms_user.mfa_enabled = True
             cms_user.mfa_secret = admin.mfa_secret
+            cms_user.mfa_verified_at = now_utc
             db_company.commit()
 
         return {
@@ -862,7 +948,7 @@ def verify_ats_admin_mfa(
         current_password = str(payload.get("current_password") or payload.get("password") or "").strip()
         pw_ok = current_password and verify_password(current_password, admin.password)
         totp = pyotp.TOTP(admin.mfa_secret)
-        totp_ok = code and totp.verify(code, valid_window=30)
+        totp_ok = code and totp.verify(code, valid_window=1)
         if not (pw_ok or totp_ok):
             raise HTTPException(
                 status_code=400,
@@ -870,11 +956,95 @@ def verify_ats_admin_mfa(
             )
 
         admin.is_mfa_enabled = False
+        admin.mfa_verified_at = None
         db.commit()
 
         cms_user = db_company.query(User).filter(User.email == admin.email).first()
         if cms_user:
             cms_user.mfa_enabled = False
+            cms_user.mfa_verified_at = None
+            db_company.commit()
+
+        return {"success": True, "message": "MFA successfully disabled."}
+
+    now_utc = datetime.now(timezone.utc)
+    if admin.totp_locked_until:
+        locked_until = admin.totp_locked_until if admin.totp_locked_until.tzinfo else admin.totp_locked_until.replace(tzinfo=timezone.utc)
+        if locked_until > now_utc:
+            remaining = int((locked_until - now_utc).total_seconds())
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Akun terkunci sementara karena terlalu banyak percobaan salah. Coba lagi dalam {remaining} detik.",
+            )
+
+    if enable:
+        if admin.is_mfa_enabled:
+            raise HTTPException(status_code=400, detail="MFA sudah aktif.")
+        if not admin.mfa_secret:
+            raise HTTPException(status_code=400, detail="Secret MFA belum diinisialisasi.")
+
+        current_timestep = int(time.time() / 30)
+        if getattr(admin, "last_used_totp_timestep", None) == current_timestep:
+            raise HTTPException(status_code=400, detail="Kode TOTP telah digunakan. Tunggu kode berikutnya (30 detik).")
+
+        totp = pyotp.TOTP(admin.mfa_secret)
+        if not totp.verify(code, valid_window=1):
+            admin.totp_failed_attempts = getattr(admin, "totp_failed_attempts", 0) + 1
+            if admin.totp_failed_attempts >= 5:
+                admin.totp_locked_until = now_utc + timedelta(minutes=15)
+            db.commit()
+            raise HTTPException(
+                status_code=400,
+                detail="Kode verifikasi 6-digit tidak valid atau sudah kedaluwarsa.",
+            )
+
+        admin.totp_failed_attempts = 0
+        admin.totp_locked_until = None
+        admin.last_used_totp_timestep = current_timestep
+        admin.is_mfa_enabled = True
+        admin.mfa_verified_at = now_utc
+        db.commit()
+
+        cms_user = db_company.query(User).filter(User.email == admin.email).first()
+        if cms_user:
+            cms_user.mfa_enabled = True
+            cms_user.mfa_secret = admin.mfa_secret
+            cms_user.mfa_verified_at = now_utc
+            db_company.commit()
+
+        return {
+            "success": True,
+            "message": "Autentikasi 2 Langkah (Google Authenticator) berhasil diaktifkan untuk akun Anda!",
+        }
+    else:
+        admin_roles = ["admin", "hr", "user_dept", "marketing"]
+        if admin.role in admin_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="MFA wajib aktif untuk akun administrator dan tidak dapat dinonaktifkan.",
+            )
+
+        if not admin.mfa_secret:
+            raise HTTPException(status_code=400, detail="MFA belum diaktifkan.")
+
+        current_password = str(payload.get("current_password") or payload.get("password") or "").strip()
+        pw_ok = current_password and verify_password(current_password, admin.password)
+        totp = pyotp.TOTP(admin.mfa_secret)
+        totp_ok = code and totp.verify(code, valid_window=1)
+        if not (pw_ok or totp_ok):
+            raise HTTPException(
+                status_code=400,
+                detail="Menonaktifkan MFA memerlukan kode verifikasi TOTP yang valid atau kata sandi akun.",
+            )
+
+        admin.is_mfa_enabled = False
+        admin.mfa_verified_at = None
+        db.commit()
+
+        cms_user = db_company.query(User).filter(User.email == admin.email).first()
+        if cms_user:
+            cms_user.mfa_enabled = False
+            cms_user.mfa_verified_at = None
             db_company.commit()
 
         return {"success": True, "message": "MFA successfully disabled."}

@@ -59,7 +59,7 @@ def test_applicant_token_rejected_on_admin():
 
 
 def test_cms_token_not_mapped_to_recruitment_admin():
-    """Token CMS (type=cms, sub=2, role=marketing) TIDAK BOLEH dipetakan ke RecruitmentAdmin ID=2 (role=admin)."""
+    """Token CMS (type=cms, sub=2, role=marketing) DITOLAK pada get_current_admin dan TIDAK dipetakan ke RecruitmentAdmin ID=2."""
     db = MagicMock()
     rec_admin = RecruitmentAdmin(id=2, username="hr_boss", email="boss@itsp.co.id", role="admin")
     cms_user = User(id=2, username="market2", email="mkt@itsp.co.id", name="Staff Marketing", role="marketing", is_active=True)
@@ -74,10 +74,17 @@ def test_cms_token_not_mapped_to_recruitment_admin():
     req = make_request()
 
     with patch.object(crud_admin, "get", return_value=rec_admin):
-        admin_entity = get_current_admin(req, creds, db)
-        assert admin_entity.role == "marketing"
-        assert admin_entity.id == 2
-        assert admin_entity.email == "mkt@itsp.co.id"
+        with pytest.raises(HTTPException) as exc:
+            get_current_admin(req, creds, db)
+        assert exc.value.status_code == 403
+        assert "cms" in exc.value.detail.lower()
+
+    # Namun lolos pada dependensi khusus CMS (get_cms_user_base)
+    from app.api.deps import get_cms_user_base
+    user_entity = get_cms_user_base(req, creds, db)
+    assert user_entity.role == "marketing"
+    assert user_entity.id == 2
+    assert user_entity.email == "mkt@itsp.co.id"
 
 
 def test_valid_ats_token_accepted():

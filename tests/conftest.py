@@ -3,8 +3,11 @@ import pytest
 
 # Pastikan environment test tersetting sebelum modul app di-import
 os.environ["ENVIRONMENT"] = "test"
+os.environ["DEBUG"] = "true"
 os.environ.setdefault("SECRET_KEY", "test_jwt_secret_key_minimum_32_characters_long_for_testing")
 os.environ.setdefault("INTERNAL_API_SECRET", "test_internal_api_secret_minimum_32_characters_for_proxy")
+os.environ.setdefault("DATABASE_URL", "sqlite:///./test_karir.db")
+os.environ.setdefault("DATABASE_COMPANY_URL", "sqlite:///./test_company.db")
 
 from app.core.config import settings
 settings.ENVIRONMENT = "test"

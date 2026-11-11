@@ -75,52 +75,18 @@ def test_saklar_enforce_disabled_allows_operational_endpoint():
 
 
 def test_saklar_enforce_enabled_rejects_operational_endpoints():
-    """When FIRST_LOGIN_ENFORCE is True, guard rejects first_login_setup scoped token with 403."""
+    """When FIRST_LOGIN_ENFORCE is True, get_current_admin rejects unverified / first-login accounts with 403."""
     orig_enforce = settings.FIRST_LOGIN_ENFORCE
     settings.FIRST_LOGIN_ENFORCE = True
     try:
         token = create_access_token(
             subject=1,
             role="admin",
-            scope="first_login_setup",
             extra_claims={"type": "ats"},
         )
         credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 
         mock_request = MagicMock()
-        mock_request.url.path = "/api/v1/recruitment/admins"
-        mock_request.headers.get.return_value = None
-
-        mock_db = MagicMock()
-
-        with pytest.raises(HTTPException) as exc_info:
-            get_current_admin(
-                request=mock_request,
-                credentials=credentials,
-                db=mock_db,
-            )
-
-        assert exc_info.value.status_code == 403
-        assert "Wajib mengganti kata sandi dan mengaktifkan MFA" in exc_info.value.detail
-    finally:
-        settings.FIRST_LOGIN_ENFORCE = orig_enforce
-
-
-def test_scoped_token_allowed_on_setup_endpoints():
-    """Dependency guard permits first_login_setup scoped token on allowed setup routes even if ENFORCE is True."""
-    orig_enforce = settings.FIRST_LOGIN_ENFORCE
-    settings.FIRST_LOGIN_ENFORCE = True
-    try:
-        token = create_access_token(
-            subject=1,
-            role="admin",
-            scope="first_login_setup",
-            extra_claims={"type": "ats"},
-        )
-        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-
-        mock_request = MagicMock()
-        mock_request.url.path = "/api/v1/cms/profile"
         mock_request.headers.get.return_value = None
 
         mock_db = MagicMock()
@@ -130,19 +96,71 @@ def test_scoped_token_allowed_on_setup_endpoints():
             name="Admin",
             email="admin@itsp.co.id",
             role="admin",
+            is_active=True,
+            is_first_login=True,
+            is_mfa_enabled=False,
+            session_version=1,
         )
-        mock_db.query().filter().first.return_value = fake_admin
         from app.crud.crud_auth import crud_admin
         orig_get = crud_admin.get
         crud_admin.get = MagicMock(return_value=fake_admin)
 
         try:
-            admin = get_current_admin(
+            with pytest.raises(HTTPException) as exc_info:
+                get_current_admin(
+                    request=mock_request,
+                    credentials=credentials,
+                    db=mock_db,
+                )
+
+            assert exc_info.value.status_code == 403
+            assert "FIRST_LOGIN_REQUIRED" in exc_info.value.detail
+        finally:
+            crud_admin.get = orig_get
+    finally:
+        settings.FIRST_LOGIN_ENFORCE = orig_enforce
+
+
+def test_scoped_token_allowed_on_setup_endpoints():
+    """Base dependency (get_authenticated_admin_base) permits unverified / first-login admin on setup flows."""
+    from app.api.deps import get_authenticated_admin_base
+    orig_enforce = settings.FIRST_LOGIN_ENFORCE
+    settings.FIRST_LOGIN_ENFORCE = True
+    try:
+        token = create_access_token(
+            subject=1,
+            role="admin",
+            extra_claims={"type": "ats"},
+        )
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+
+        mock_request = MagicMock()
+        mock_request.headers.get.return_value = None
+
+        mock_db = MagicMock()
+        fake_admin = RecruitmentAdmin(
+            id=1,
+            username="admin",
+            name="Admin",
+            email="admin@itsp.co.id",
+            role="admin",
+            is_active=True,
+            is_first_login=True,
+            is_mfa_enabled=False,
+            session_version=1,
+        )
+        from app.crud.crud_auth import crud_admin
+        orig_get = crud_admin.get
+        crud_admin.get = MagicMock(return_value=fake_admin)
+
+        try:
+            admin = get_authenticated_admin_base(
                 request=mock_request,
                 credentials=credentials,
                 db=mock_db,
             )
             assert admin.id == 1
+            assert admin.is_first_login is True
         finally:
             crud_admin.get = orig_get
     finally:
