@@ -98,3 +98,38 @@ def test_recruitment_reset_password_generates_temp_password():
     assert verify_password(temp_pw, target_admin.password) is True
     assert target_admin.is_first_login is True
     assert "no-store" in resp_obj.headers.get("Cache-Control", "")
+
+
+def test_admin_create_rejects_password_less_than_12_chars():
+    """B.3: AdminCreate mewajibkan password minimal 12 karakter bila diisi."""
+    from pydantic import ValidationError
+    from app.schemas.auth import AdminCreate
+
+    # Password 11 karakter -> HARUS GAGAL
+    with pytest.raises(ValidationError) as exc:
+        AdminCreate(
+            username="admin_test",
+            name="Admin Test",
+            email="test@itsp.co.id",
+            password="shortpass11",  # 11 chars
+        )
+    assert any("at least 12 characters" in str(err) or "min_length" in str(err) for err in exc.value.errors())
+
+    # Password 12 karakter -> HARUS LOLOS
+    admin_valid = AdminCreate(
+        username="admin_test",
+        name="Admin Test",
+        email="test@itsp.co.id",
+        password="validpass123",  # 12 chars
+    )
+    assert admin_valid.password == "validpass123"
+
+    # Password None/kosong -> HARUS LOLOS (karena CRUD akan generate random 16-char)
+    admin_none = AdminCreate(
+        username="admin_test",
+        name="Admin Test",
+        email="test@itsp.co.id",
+        password=None,
+    )
+    assert admin_none.password is None
+
