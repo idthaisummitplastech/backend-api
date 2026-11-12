@@ -81,7 +81,6 @@ def execute_recovery(
     identifier: str,
     action: str,
     custom_password: Optional[str] = None,
-    sync: bool = False,
     db_ats=None,
     db_cms=None,
 ) -> Tuple[bool, str, Optional[str]]:
@@ -147,37 +146,10 @@ def execute_recovery(
         account.session_version = (getattr(account, "session_version", 1) or 1) + 1
         active_db.commit()
 
-        # 4. Optional Realm Synchronization
-        if sync and target_email:
-            peer_db = db_cms if realm_normalized == "ats" else db_ats
-            peer_realm = "cms" if realm_normalized == "ats" else "ats"
-            peer_account = find_account(peer_db, peer_realm, target_email)
-            if peer_account:
-                if action_normalized in ("reset-mfa", "break-glass"):
-                    if peer_realm == "ats":
-                        peer_account.is_mfa_enabled = False
-                    else:
-                        peer_account.mfa_enabled = False
-                    peer_account.mfa_secret = None
-                    if hasattr(peer_account, "backup_codes"):
-                        peer_account.backup_codes = None
-                    peer_account.mfa_verified_at = None
-                    peer_account.totp_failed_attempts = 0
-                    peer_account.totp_locked_until = None
-
-                if action_normalized in ("reset-password", "break-glass") and temp_pwd_generated:
-                    peer_account.password = get_password_hash(temp_pwd_generated)
-                    peer_account.is_first_login = True
-                    peer_account.password_changed_at = now_utc
-                    peer_account.mfa_verified_at = None
-
-                peer_account.session_version = (getattr(peer_account, "session_version", 1) or 1) + 1
-                peer_db.commit()
-
         # AUDIT LOG AMAN: TIDAK MENCATAT PASSWORD
         logger.info(
             f"RECOVERY_SUCCESS realm={realm_normalized} account_id={account.id} "
-            f"email={target_email} action={action_normalized} sync={sync} "
+            f"email={target_email} action={action_normalized} "
             f"session_version={account.session_version} is_first_login={getattr(account, 'is_first_login', None)}"
         )
 
@@ -225,13 +197,6 @@ def main():
         default=None,
         help="Kata sandi baru pilihan operator (opsional). Jika tidak diisi, dibuatkan otomatis.",
     )
-    parser.add_argument(
-        "--sync",
-        action="store_true",
-        default=False,
-        help="Sinkronisasikan reset kredensial ke realm pasangan jika email akun ditemukan sama.",
-    )
-
     args = parser.parse_args()
 
     success, message, temp_pwd = execute_recovery(
@@ -239,7 +204,6 @@ def main():
         identifier=args.identifier,
         action=args.action,
         custom_password=args.password,
-        sync=args.sync,
     )
 
     print("\n" + "=" * 60)

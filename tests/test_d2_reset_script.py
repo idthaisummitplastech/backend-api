@@ -123,14 +123,13 @@ def test_d2_action_reset_password_and_first_login():
     assert admin.session_version == 2
 
 
-def test_d2_action_break_glass_with_sync():
-    """Break-glass performs both password reset and MFA reset, and syncs to CMS peer account."""
+def test_d2_action_break_glass_isolated_realm():
+    """Break-glass performs both password reset and MFA reset on target realm only, leaving peer realm untouched."""
     db = TestingSessionLocal()
     ok, msg, temp_pwd = execute_recovery(
         realm="ats",
         identifier="super@itsp.co.id",
         action="break-glass",
-        sync=True,
         db_ats=db,
         db_cms=db,
     )
@@ -138,19 +137,17 @@ def test_d2_action_break_glass_with_sync():
     assert temp_pwd is not None
     assert len(temp_pwd) >= 16
 
-    # Verify ATS account
+    # Verify ATS account is reset
     admin = db.query(RecruitmentAdmin).filter(RecruitmentAdmin.id == 1).first()
     assert admin.is_mfa_enabled is False
     assert admin.is_first_login is True
     assert verify_password(temp_pwd, admin.password) is True
     assert admin.session_version == 2
 
-    # Verify synced CMS account
+    # Verify peer CMS account is NOT touched (realm isolation strictly preserved)
     cms_user = db.query(User).filter(User.id == 10).first()
-    assert cms_user.mfa_enabled is False
-    assert cms_user.is_first_login is True
-    assert verify_password(temp_pwd, cms_user.password) is True
-    assert cms_user.session_version == 2
+    assert cms_user.mfa_enabled is True  # CMS remains untouched
+    assert cms_user.is_first_login is False
 
 
 def test_d2_audit_log_never_contains_password(caplog):

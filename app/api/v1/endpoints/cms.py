@@ -134,12 +134,26 @@ def reorder_admin_menus(
 # --- DASHBOARD STATS FOR WEB PERUSAHAAN ---
 @router.get("/dashboard-stats")
 def get_dashboard_stats(
-    request: Request,
+    request: Request = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_cms_user),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
+    current_user: Any = None,
 ):
     """Retrieve summarized statistics for CMS Admin Dashboard."""
-    admin_role = (current_user.role or "").lower()
+    if not isinstance(current_user, User):
+        if isinstance(credentials, HTTPAuthorizationCredentials) and credentials.credentials:
+            current_user = get_current_cms_user(request=request, credentials=credentials, db_company=db)
+        elif request:
+            require_internal_secret(request)
+            current_user = get_current_cms_user(request=request, credentials=None, db_company=db)
+        else:
+            raise HTTPException(status_code=403, detail="Akses ditolak.")
+
+    admin_role = (
+        getattr(current_user, "role", None)
+        or (request.headers.get("x-admin-role") if request else None)
+        or ""
+    ).lower()
     if admin_role not in ["admin", "superadmin", "marketing"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -195,13 +209,31 @@ def get_cms_profile(
     user_id: int = Query(...),
     request: Request = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_cms_user),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
+    current_user: Any = None,
 ):
     """Fetch CMS user profile with anti-IDOR verification."""
-    require_account_identity(current_user, user_id)
-    user = current_user if current_user.id == user_id else db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+    if isinstance(current_user, User):
+        require_account_identity(current_user, user_id)
+        user = current_user
+    elif isinstance(credentials, HTTPAuthorizationCredentials) and credentials.credentials:
+        current_user = get_current_cms_user(request=request, credentials=credentials, db_company=db)
+        require_account_identity(current_user, user_id)
+        user = current_user
+    elif request:
+        require_internal_secret(request)
+        cms_id_hdr = request.headers.get("x-cms-user-id") or request.headers.get("X-CMS-User-Id")
+        if cms_id_hdr:
+            current_user = get_current_cms_user(request=request, credentials=None, db_company=db)
+            require_account_identity(current_user, user_id)
+            user = current_user
+        else:
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+            _enforce_first_login_and_mfa(user, "mfa_enabled")
+    else:
+        raise HTTPException(status_code=403, detail="Akses ditolak.")
 
     backup_codes_count = 0
     if user.backup_codes:
@@ -227,24 +259,40 @@ def update_cms_profile(
     request: Request = None,
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
-    current_user: User = Depends(get_cms_user_base),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
+    current_user: Any = None,
 ):
     """Update CMS user profile, password, or MFA."""
+    if request:
+        require_internal_secret(request)
     user_id = payload.get("user_id") or payload.get("userId")
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID wajib disertakan.")
 
-    if not isinstance(current_user, User):
-        user = db.query(User).filter(User.id == int(user_id)).first()
-    else:
-        user = current_user if current_user.id == int(user_id) else db.query(User).filter(User.id == int(user_id)).first()
+    if isinstance(current_user, User):
+        user = current_user
         require_account_identity(current_user, user_id)
+    elif isinstance(credentials, HTTPAuthorizationCredentials) and credentials.credentials:
+        current_user = get_cms_user_base(request=request, credentials=credentials, db_company=db)
+        require_account_identity(current_user, user_id)
+        user = current_user
+    elif request:
+        cms_id_hdr = request.headers.get("x-cms-user-id") or request.headers.get("X-CMS-User-Id")
+        if cms_id_hdr:
+            current_user = get_cms_user_base(request=request, credentials=None, db_company=db)
+            require_account_identity(current_user, user_id)
+            user = current_user
+        else:
+            user = db.query(User).filter(User.id == int(user_id)).first()
+    else:
+        user = db.query(User).filter(User.id == int(user_id)).first()
+
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
 
     action = payload.get("action")
-    if action != "change_password" and isinstance(current_user, User):
-        _enforce_first_login_and_mfa(current_user, "mfa_enabled")
+    if action != "change_password":
+        _enforce_first_login_and_mfa(user, "mfa_enabled")
 
     if action == "update_profile":
         name = str(payload.get("name", "")).strip()
