@@ -1,5 +1,5 @@
 import pytest
-from scripts.verify_env_consistency import verify_env_secrets
+from scripts.verify_env_consistency import verify_env_secrets, verify_first_login_enforce_consistency
 
 
 def test_verify_env_secrets_success():
@@ -65,3 +65,34 @@ def test_verify_env_secrets_fails_on_jwt_and_internal_secret_collision():
     )
     assert is_valid is False
     assert any("PELANGGARAN PEMISAHAN SECRET" in err for err in errors)
+
+
+def test_verify_first_login_enforce_consistency_success():
+    """All services match in FIRST_LOGIN_ENFORCE boolean value."""
+    # When all true
+    ok1, err1 = verify_first_login_enforce_consistency("true", "true", "true")
+    assert ok1 is True
+    assert len(err1) == 0
+
+    # When all false
+    ok2, err2 = verify_first_login_enforce_consistency("false", "false", "false")
+    assert ok2 is True
+    assert len(err2) == 0
+
+
+def test_verify_first_login_enforce_consistency_fails_on_mismatch():
+    """Fails when any service has mismatching switch value."""
+    ok, err = verify_first_login_enforce_consistency("true", "false", "true")
+    assert ok is False
+    assert any("MISMATCH FIRST_LOGIN_ENFORCE! Backend (True) != Web Karir (False)" in e for e in err)
+
+
+def test_verify_first_login_enforce_rejects_next_public():
+    """Fails when frontend defines NEXT_PUBLIC_FIRST_LOGIN_ENFORCE."""
+    ok, err = verify_first_login_enforce_consistency(
+        "true", "true", "true",
+        career_env={"NEXT_PUBLIC_FIRST_LOGIN_ENFORCE": "true"}
+    )
+    assert ok is False
+    assert any("Dilarang menggunakan NEXT_PUBLIC_FIRST_LOGIN_ENFORCE" in e for e in err)
+

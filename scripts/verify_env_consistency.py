@@ -94,6 +94,47 @@ def verify_env_secrets(
     return (len(errors) == 0, errors)
 
 
+def verify_first_login_enforce_consistency(
+    backend_enforce: Optional[str],
+    career_enforce: Optional[str],
+    company_enforce: Optional[str],
+    career_env: Optional[Dict[str, str]] = None,
+    company_env: Optional[Dict[str, str]] = None,
+) -> Tuple[bool, List[str]]:
+    """
+    A.6: Memastikan saklar FIRST_LOGIN_ENFORCE di backend dan kedua frontend bernilai sama,
+    dan tidak ada penggunaan NEXT_PUBLIC_FIRST_LOGIN_ENFORCE di frontend.
+    """
+    errors: List[str] = []
+
+    # Cek larangan NEXT_PUBLIC
+    if career_env and "NEXT_PUBLIC_FIRST_LOGIN_ENFORCE" in career_env:
+        errors.append("[GAGAL] Web Karir: Dilarang menggunakan NEXT_PUBLIC_FIRST_LOGIN_ENFORCE (harus server-side).")
+    if company_env and "NEXT_PUBLIC_FIRST_LOGIN_ENFORCE" in company_env:
+        errors.append("[GAGAL] Web Perusahaan: Dilarang menggunakan NEXT_PUBLIC_FIRST_LOGIN_ENFORCE (harus server-side).")
+
+    # Normalisasi boolean string: "true"/"1" -> True, selain itu False
+    def to_bool(val: Optional[str]) -> bool:
+        if not val:
+            return False
+        return str(val).strip().lower() in ("true", "1", "yes", "on")
+
+    b_val = to_bool(backend_enforce)
+    c_val = to_bool(career_enforce)
+    p_val = to_bool(company_enforce)
+
+    if b_val != c_val:
+        errors.append(
+            f"[GAGAL] MISMATCH FIRST_LOGIN_ENFORCE! Backend ({b_val}) != Web Karir ({c_val}). Saklar wajib bernilai sama."
+        )
+    if b_val != p_val:
+        errors.append(
+            f"[GAGAL] MISMATCH FIRST_LOGIN_ENFORCE! Backend ({b_val}) != Web Perusahaan ({p_val}). Saklar wajib bernilai sama."
+        )
+
+    return (len(errors) == 0, errors)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Verifikasi konsistensi secret backend dan frontend.")
     parser.add_argument("--backend-env", default="", help="Path ke file .env backend-api")
@@ -118,16 +159,32 @@ def main():
         backend_jwt_secret=backend_jwt_secret,
     )
 
-    if not is_valid:
+    # Verifikasi saklar FIRST_LOGIN_ENFORCE
+    b_enforce = b_env.get("FIRST_LOGIN_ENFORCE") or os.environ.get("FIRST_LOGIN_ENFORCE")
+    c_enforce = c_env.get("FIRST_LOGIN_ENFORCE") or os.environ.get("CAREER_FIRST_LOGIN_ENFORCE") or os.environ.get("FIRST_LOGIN_ENFORCE")
+    p_enforce = p_env.get("FIRST_LOGIN_ENFORCE") or os.environ.get("COMPANY_FIRST_LOGIN_ENFORCE") or os.environ.get("FIRST_LOGIN_ENFORCE")
+
+    enforce_valid, enforce_errors = verify_first_login_enforce_consistency(
+        backend_enforce=b_enforce,
+        career_enforce=c_enforce,
+        company_enforce=p_enforce,
+        career_env=c_env,
+        company_env=p_env,
+    )
+
+    all_valid = is_valid and enforce_valid
+    all_errors = errors + enforce_errors
+
+    if not all_valid:
         print("=" * 70, file=sys.stderr)
-        print("VERIFIKASI ENVIRONMENT GAGAL! DETEKSI KETIDAKKONSISTENAN SECRET:", file=sys.stderr)
+        print("VERIFIKASI ENVIRONMENT GAGAL! DETEKSI KETIDAKKONSISTENAN:", file=sys.stderr)
         print("=" * 70, file=sys.stderr)
-        for err in errors:
+        for err in all_errors:
             print(f"- {err}", file=sys.stderr)
         print("=" * 70, file=sys.stderr)
         sys.exit(1)
     else:
-        print("[SUKSES] Seluruh secret lingkungan konsisten, memenuhi batas minimal 32 karakter, dan terisolasi dengan aman.")
+        print("[SUKSES] Seluruh secret lingkungan dan saklar FIRST_LOGIN_ENFORCE konsisten dan aman.")
         sys.exit(0)
 
 
