@@ -112,7 +112,11 @@ def test_d5_operational_dependency_blocks_first_login_cms_user():
     settings.FIRST_LOGIN_ENFORCE = True
     try:
         db = TestingSessionLocal()
-        req = make_request({"X-Internal-Secret": settings.INTERNAL_API_SECRET, "X-CMS-User-Id": "102"})
+        req = make_request({
+            "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+            "X-CMS-User-Id": "102",
+            "X-Session-Version": "1",
+        })
 
         with pytest.raises(HTTPException) as exc:
             get_current_cms_user(request=req, credentials=None, db_company=db)

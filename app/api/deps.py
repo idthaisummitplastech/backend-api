@@ -288,6 +288,25 @@ def get_current_admin(
     dan menegakkan aturan First-Login dan MFA Wajib (Opsi A) bila FIRST_LOGIN_ENFORCE aktif.
     """
     admin = get_authenticated_admin_base(request=request, credentials=credentials, db=db)
+
+    # Penguatan 2: saat penegakan aktif, tolak akun sintetis role-only (id=0)
+    # pada endpoint operasional — wajib X-Admin-Id dengan identitas nyata.
+    if settings.FIRST_LOGIN_ENFORCE and getattr(admin, "id", None) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Penegakan first-login aktif: endpoint operasional ATS memerlukan header X-Admin-Id dengan identitas nyata.",
+        )
+
+    # Penguatan 1: saat FIRST_LOGIN_ENFORCE=true, header X-Session-Version WAJIB ada
+    # untuk pemanggilan ber-X-Admin-Id; jika tidak ada, tolak 401.
+    if settings.FIRST_LOGIN_ENFORCE and _header(request, "x-admin-id", "X-Admin-Id"):
+        session_ver_hdr = _header(request, "x-session-version", "X-Session-Version")
+        if session_ver_hdr is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Header X-Session-Version wajib disertakan saat penegakan first-login aktif.",
+            )
+
     _enforce_first_login_and_mfa(admin, "is_mfa_enabled")
     return admin
 
@@ -337,6 +356,11 @@ def get_cms_user_base(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Header role tidak sesuai dengan data akun.")
 
             session_ver_hdr = _header(request, "x-session-version", "X-Session-Version")
+            if settings.FIRST_LOGIN_ENFORCE and session_ver_hdr is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Header X-Session-Version wajib disertakan saat penegakan first-login aktif.",
+                )
             if session_ver_hdr is not None:
                 try:
                     s_ver = int(session_ver_hdr)
@@ -423,6 +447,25 @@ def get_current_cms_user(
     dan menegakkan aturan First-Login dan MFA Wajib (Opsi A) bila FIRST_LOGIN_ENFORCE aktif.
     """
     user = get_cms_user_base(request=request, credentials=credentials, db_company=db_company)
+
+    # Penguatan 2: saat penegakan aktif, tolak akun sintetis role-only (id=0)
+    # pada endpoint operasional — wajib X-CMS-User-Id dengan identitas nyata.
+    if settings.FIRST_LOGIN_ENFORCE and getattr(user, "id", None) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Penegakan first-login aktif: endpoint operasional CMS memerlukan header X-CMS-User-Id dengan identitas nyata.",
+        )
+
+    # Penguatan 1: saat FIRST_LOGIN_ENFORCE=true, header X-Session-Version WAJIB ada
+    # untuk pemanggilan ber-X-CMS-User-Id; jika tidak ada, tolak 401.
+    if settings.FIRST_LOGIN_ENFORCE and _header(request, "x-cms-user-id", "X-CMS-User-Id"):
+        session_ver_hdr = _header(request, "x-session-version", "X-Session-Version")
+        if session_ver_hdr is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Header X-Session-Version wajib disertakan saat penegakan first-login aktif.",
+            )
+
     _enforce_first_login_and_mfa(user, "mfa_enabled")
     return user
 

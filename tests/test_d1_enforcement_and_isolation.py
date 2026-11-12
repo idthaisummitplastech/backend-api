@@ -270,7 +270,11 @@ def test_amendment_3_and_7_operational_enforcement_option_a():
         db.commit()
 
         # Admin 2 has is_first_login = True -> operational dependency MUST REJECT (403)
-        req_ats = make_request({"X-Internal-Secret": settings.INTERNAL_API_SECRET, "X-Admin-Id": "2"})
+        req_ats = make_request({
+            "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+            "X-Admin-Id": "2",
+            "X-Session-Version": "1",
+        })
         with pytest.raises(HTTPException) as exc1:
             get_current_admin(request=req_ats, credentials=None, db=db)
         assert exc1.value.status_code == 403
