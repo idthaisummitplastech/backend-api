@@ -196,3 +196,102 @@ def test_d5_cms_write_access_roles():
     check_cms_write_access("users", admin_ready)
     check_cms_write_access("products", admin_ready)
 
+
+def test_cms_role_from_db_and_mismatched_header_rejected_403():
+    """
+    A.4: get_current_cms_user / get_cms_user_base menggunakan peran dari baris DB User.
+    Jika header X-Admin-Role dikirim dan berbeda dengan database, tolak 403.
+    """
+    db = TestingSessionLocal()
+    mkt_user = db.query(User).filter(User.id == 103).first()
+    assert mkt_user.role == "marketing"
+
+    # 1. Header X-Admin-Role = 'admin' tapi di DB adalah 'marketing' -> TOLAK 403
+    req_mismatch = make_request({
+        "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+        "X-CMS-User-Id": "103",
+        "X-Admin-Role": "admin",
+    })
+    with pytest.raises(HTTPException) as exc:
+        get_cms_user_base(request=req_mismatch, credentials=None, db_company=db)
+    assert exc.value.status_code == 403
+    assert "Header role tidak sesuai dengan data akun" in exc.value.detail
+
+    # 2. Header X-Admin-Role cocok ('marketing') -> SUKSES, peran dari DB
+    req_match = make_request({
+        "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+        "X-CMS-User-Id": "103",
+        "X-Admin-Role": "marketing",
+    })
+    user_resolved = get_cms_user_base(request=req_match, credentials=None, db_company=db)
+    assert user_resolved.id == 103
+    assert user_resolved.role == "marketing"
+
+    # 3. Tanpa header X-Admin-Role -> SUKSES, peran mutlak dari DB
+    req_no_role = make_request({
+        "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+        "X-CMS-User-Id": "103",
+    })
+    user_no_role = get_cms_user_base(request=req_no_role, credentials=None, db_company=db)
+    assert user_no_role.id == 103
+    assert user_no_role.role == "marketing"
+
+
+def test_stale_session_rejected_after_password_change_and_reset_both_enforce_modes():
+    """
+    A.1: Cookie/versi sesi usang ditolak setelah ganti password dan setelah reset-password,
+    baik FIRST_LOGIN_ENFORCE=true maupun false.
+    """
+    from fastapi.security import HTTPAuthorizationCredentials
+    from app.core.security import create_access_token
+
+    for enforce_mode in [True, False]:
+        orig_enforce = settings.FIRST_LOGIN_ENFORCE
+        settings.FIRST_LOGIN_ENFORCE = enforce_mode
+        try:
+            db = TestingSessionLocal()
+            user = db.query(User).filter(User.id == 101).first()
+            user.session_version = 1
+            user.password_changed_at = datetime.now(timezone.utc)
+            db.commit()
+
+            # --- Skenario 1: Setelah reset-password / ganti password, session_version naik ke 2 ---
+            user.session_version = 2
+            db.commit()
+
+            # Panggilan via internal helper dengan header X-Session-Version: 1 (usang) -> 401
+            req_stale_header = make_request({
+                "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+                "X-CMS-User-Id": "101",
+                "X-Session-Version": "1",
+            })
+            with pytest.raises(HTTPException) as exc1:
+                get_cms_user_base(request=req_stale_header, credentials=None, db_company=db)
+            assert exc1.value.status_code == 401
+            assert "dibatalkan" in exc1.value.detail.lower()
+
+            # Panggilan via JWT dengan session_version: 1 (usang) -> 401
+            token_stale = create_access_token(
+                subject=101,
+                role="admin",
+                extra_claims={"type": "cms", "session_version": 1}
+            )
+            creds_stale = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token_stale)
+            req_jwt = make_request({})
+            with pytest.raises(HTTPException) as exc2:
+                get_cms_user_base(request=req_jwt, credentials=creds_stale, db_company=db)
+            assert exc2.value.status_code == 401
+            assert "dibatalkan" in exc2.value.detail.lower()
+
+            # Panggilan dengan X-Session-Version: 2 (terkini) -> SUKSES
+            req_valid = make_request({
+                "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+                "X-CMS-User-Id": "101",
+                "X-Session-Version": "2",
+            })
+            user_ok = get_cms_user_base(request=req_valid, credentials=None, db_company=db)
+            assert user_ok.id == 101
+        finally:
+            settings.FIRST_LOGIN_ENFORCE = orig_enforce
+
+
