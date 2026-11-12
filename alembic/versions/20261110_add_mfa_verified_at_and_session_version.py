@@ -4,11 +4,16 @@ Revision ID: 20261110_mfa_session_fields
 Revises: 
 Create Date: 2026-11-10 12:00:00.000000
 
-Catatan: File migrasi ini HANYA disiapkan (Amandemen 4).
-Urutan eksekusi saat rilis:
-1. Backup basis data produksi (web_karir & web_perusahaan).
-2. Jalankan `alembic upgrade head` pada kedua database target.
-3. Deploy kode backend-api terbaru.
+Catatan Multi-Database:
+File migrasi ini aman dijalankan terpisah untuk DATABASE_URL (Career DB)
+maupun DATABASE_COMPANY_URL (Company DB). Script secara otomatis mendeteksi
+keberadaan tabel target sebelum menjalankan penambahan/penghapusan kolom.
+
+Perintah Eksekusi Rilis (Terpisah):
+1. Career DB (web_karir):
+   DATABASE_URL="<CAREER_DB_DSN>" alembic upgrade head
+2. Company DB (web_perusahaan):
+   DATABASE_URL="<COMPANY_DB_DSN>" alembic upgrade head
 """
 from alembic import op
 import sqlalchemy as sa
@@ -22,37 +27,56 @@ depends_on = None
 
 
 def upgrade():
-    # 1. Update tabel recruitment_admins (web_karir)
-    op.add_column('recruitment_admins', sa.Column('mfa_verified_at', sa.DateTime(timezone=True), nullable=True))
-    op.add_column('recruitment_admins', sa.Column('password_changed_at', sa.DateTime(timezone=True), nullable=True))
-    op.add_column('recruitment_admins', sa.Column('session_version', sa.Integer(), nullable=False, server_default='1'))
-    op.add_column('recruitment_admins', sa.Column('totp_failed_attempts', sa.Integer(), nullable=False, server_default='0'))
-    op.add_column('recruitment_admins', sa.Column('totp_locked_until', sa.DateTime(timezone=True), nullable=True))
-    op.add_column('recruitment_admins', sa.Column('last_used_totp_timestep', sa.Integer(), nullable=True))
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    tables = inspector.get_table_names()
 
-    # 2. Update tabel users (web_perusahaan)
-    op.add_column('users', sa.Column('mfa_verified_at', sa.DateTime(timezone=True), nullable=True))
-    op.add_column('users', sa.Column('password_changed_at', sa.DateTime(timezone=True), nullable=True))
-    op.add_column('users', sa.Column('session_version', sa.Integer(), nullable=False, server_default='1'))
-    op.add_column('users', sa.Column('totp_failed_attempts', sa.Integer(), nullable=False, server_default='0'))
-    op.add_column('users', sa.Column('totp_locked_until', sa.DateTime(timezone=True), nullable=True))
-    op.add_column('users', sa.Column('last_used_totp_timestep', sa.Integer(), nullable=True))
+    # 1. Update tabel recruitment_admins (khusus basis data web_karir)
+    if 'recruitment_admins' in tables:
+        existing_cols = [c['name'] for c in inspector.get_columns('recruitment_admins')]
+        if 'mfa_verified_at' not in existing_cols:
+            op.add_column('recruitment_admins', sa.Column('mfa_verified_at', sa.DateTime(timezone=True), nullable=True))
+        if 'password_changed_at' not in existing_cols:
+            op.add_column('recruitment_admins', sa.Column('password_changed_at', sa.DateTime(timezone=True), nullable=True))
+        if 'session_version' not in existing_cols:
+            op.add_column('recruitment_admins', sa.Column('session_version', sa.Integer(), nullable=False, server_default='1'))
+        if 'totp_failed_attempts' not in existing_cols:
+            op.add_column('recruitment_admins', sa.Column('totp_failed_attempts', sa.Integer(), nullable=False, server_default='0'))
+        if 'totp_locked_until' not in existing_cols:
+            op.add_column('recruitment_admins', sa.Column('totp_locked_until', sa.DateTime(timezone=True), nullable=True))
+        if 'last_used_totp_timestep' not in existing_cols:
+            op.add_column('recruitment_admins', sa.Column('last_used_totp_timestep', sa.Integer(), nullable=True))
+
+    # 2. Update tabel users (khusus basis data web_perusahaan)
+    if 'users' in tables:
+        existing_cols = [c['name'] for c in inspector.get_columns('users')]
+        if 'mfa_verified_at' not in existing_cols:
+            op.add_column('users', sa.Column('mfa_verified_at', sa.DateTime(timezone=True), nullable=True))
+        if 'password_changed_at' not in existing_cols:
+            op.add_column('users', sa.Column('password_changed_at', sa.DateTime(timezone=True), nullable=True))
+        if 'session_version' not in existing_cols:
+            op.add_column('users', sa.Column('session_version', sa.Integer(), nullable=False, server_default='1'))
+        if 'totp_failed_attempts' not in existing_cols:
+            op.add_column('users', sa.Column('totp_failed_attempts', sa.Integer(), nullable=False, server_default='0'))
+        if 'totp_locked_until' not in existing_cols:
+            op.add_column('users', sa.Column('totp_locked_until', sa.DateTime(timezone=True), nullable=True))
+        if 'last_used_totp_timestep' not in existing_cols:
+            op.add_column('users', sa.Column('last_used_totp_timestep', sa.Integer(), nullable=True))
 
 
 def downgrade():
-    # Downgrade users
-    op.drop_column('users', 'last_used_totp_timestep')
-    op.drop_column('users', 'totp_locked_until')
-    op.drop_column('users', 'totp_failed_attempts')
-    op.drop_column('users', 'session_version')
-    op.drop_column('users', 'password_changed_at')
-    op.drop_column('users', 'mfa_verified_at')
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    tables = inspector.get_table_names()
 
-    # Downgrade recruitment_admins
-    op.drop_column('recruitment_admins', 'last_used_totp_timestep')
-    op.drop_column('recruitment_admins', 'totp_locked_until')
-    op.drop_column('recruitment_admins', 'totp_failed_attempts')
-    op.drop_column('recruitment_admins', 'session_version')
-    op.drop_column('recruitment_admins', 'password_changed_at')
-    op.drop_column('recruitment_admins', 'mfa_verified_at')
+    if 'users' in tables:
+        cols = [c['name'] for c in inspector.get_columns('users')]
+        for c in ['last_used_totp_timestep', 'totp_locked_until', 'totp_failed_attempts', 'session_version', 'password_changed_at', 'mfa_verified_at']:
+            if c in cols:
+                op.drop_column('users', c)
 
+    if 'recruitment_admins' in tables:
+        cols = [c['name'] for c in inspector.get_columns('recruitment_admins')]
+        for c in ['last_used_totp_timestep', 'totp_locked_until', 'totp_failed_attempts', 'session_version', 'password_changed_at', 'mfa_verified_at']:
+            if c in cols:
+                op.drop_column('recruitment_admins', c)

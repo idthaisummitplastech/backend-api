@@ -188,6 +188,18 @@ def get_authenticated_admin_base(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun dinonaktifkan.")
             if admin_role_hdr and admin_role_hdr.lower() != (admin_found.role or "").lower():
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Header role tidak sesuai dengan data akun.")
+
+            session_ver_hdr = _header(request, "x-session-version", "X-Session-Version")
+            if session_ver_hdr is not None:
+                try:
+                    s_ver = int(session_ver_hdr)
+                except (ValueError, TypeError):
+                    s_ver = 0
+                if s_ver < (getattr(admin_found, "session_version", 1) or 1):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Sesi telah dibatalkan karena perubahan kata sandi atau pemulihan akun. Silakan login kembali.",
+                    )
             return admin_found
 
         if admin_role_hdr:
@@ -321,6 +333,18 @@ def get_cms_user_base(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun pengguna CMS tidak ditemukan.")
             if hasattr(user_found, "is_active") and getattr(user_found, "is_active") is False:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun pengguna dinonaktifkan.")
+
+            session_ver_hdr = _header(request, "x-session-version", "X-Session-Version")
+            if session_ver_hdr is not None:
+                try:
+                    s_ver = int(session_ver_hdr)
+                except (ValueError, TypeError):
+                    s_ver = 0
+                if s_ver < (getattr(user_found, "session_version", 1) or 1):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Sesi telah dibatalkan karena perubahan kata sandi atau pemulihan akun. Silakan login kembali.",
+                    )
             return user_found
 
         if admin_role_hdr:
