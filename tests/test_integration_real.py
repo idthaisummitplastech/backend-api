@@ -1,4 +1,6 @@
 import os
+os.environ["ENVIRONMENT"] = "test"
+os.environ["DEBUG"] = "true"
 import json
 from datetime import datetime, timezone
 import pyotp
@@ -11,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 import app.db.session as db_session
 from app.db.base import Base
 from app.core.config import settings
+settings.ENVIRONMENT = "test"
 from app.core.security import get_password_hash, create_access_token
 from app.models.auth import RecruitmentAdmin, User
 from app.models.recruitment import Applicant, JobPosting
@@ -213,7 +216,7 @@ def test_cms_mfa_get_secret():
     assert r2.status_code == 403
 
     # Secret benar, user mfa_enabled=False -> 200 (secret dikembalikan untuk setup)
-    r3 = client.get("/api/v1/auth/cms-mfa/1", headers={"X-Internal-Secret": SECRET})
+    r3 = client.get("/api/v1/auth/cms-mfa/1", headers={"X-Internal-Secret": SECRET, "X-CMS-User-Id": "1"})
     assert r3.status_code == 200
     data3 = r3.json()
     assert data3["mfa_enabled"] is False
@@ -222,7 +225,7 @@ def test_cms_mfa_get_secret():
     assert "backup_codes" not in data3  # plaintext backup codes TIDAK dikembalikan
 
     # Secret benar, user mfa_enabled=True -> 200 (secret TIDAK dikembalikan setelah aktif)
-    r4 = client.get("/api/v1/auth/cms-mfa/3", headers={"X-Internal-Secret": SECRET})
+    r4 = client.get("/api/v1/auth/cms-mfa/3", headers={"X-Internal-Secret": SECRET, "X-CMS-User-Id": "3"})
     assert r4.status_code == 200
     data4 = r4.json()
     assert data4["mfa_enabled"] is True
@@ -239,7 +242,7 @@ def test_cms_mfa_save_secret():
     # Secret benar pada user yang belum aktif -> 200
     r2 = client.put(
         "/api/v1/auth/cms-mfa/1/save-secret",
-        headers={"X-Internal-Secret": SECRET},
+        headers={"X-Internal-Secret": SECRET, "X-CMS-User-Id": "1"},
         json={"mfa_secret": "TESTSECRET123"},
     )
     assert r2.status_code == 200
@@ -247,7 +250,7 @@ def test_cms_mfa_save_secret():
     # Secret benar pada user yang SUDAH aktif MFA -> 400 (tampering ditolak)
     r3 = client.put(
         "/api/v1/auth/cms-mfa/3/save-secret",
-        headers={"X-Internal-Secret": SECRET},
+        headers={"X-Internal-Secret": SECRET, "X-CMS-User-Id": "3"},
         json={"mfa_secret": "ATTACKERSECRET123"},
     )
     assert r3.status_code == 400
@@ -261,7 +264,7 @@ def test_cms_mfa_activate():
     # Tanpa user_id -> 400
     r2 = client.post(
         "/api/v1/auth/cms-mfa/activate",
-        headers={"X-Internal-Secret": SECRET},
+        headers={"X-Internal-Secret": SECRET, "X-CMS-User-Id": "1"},
         json={},
     )
     assert r2.status_code == 400
@@ -269,7 +272,7 @@ def test_cms_mfa_activate():
     # Secret benar -> 200 (mengaktifkan MFA)
     r3 = client.post(
         "/api/v1/auth/cms-mfa/activate",
-        headers={"X-Internal-Secret": SECRET},
+        headers={"X-Internal-Secret": SECRET, "X-CMS-User-Id": "1"},
         json={"user_id": 1, "secret": "TESTSECRET123", "backup_codes": ["B1", "B2"]},
     )
     assert r3.status_code == 200
@@ -278,7 +281,7 @@ def test_cms_mfa_activate():
     # User sudah aktif -> 400 (tidak bisa di-activate ulang)
     r4 = client.post(
         "/api/v1/auth/cms-mfa/activate",
-        headers={"X-Internal-Secret": SECRET},
+        headers={"X-Internal-Secret": SECRET, "X-CMS-User-Id": "1"},
         json={"user_id": 1, "secret": "TESTSECRET123"},
     )
     assert r4.status_code == 400
@@ -290,12 +293,12 @@ def test_ats_mfa_endpoints():
     assert r1.status_code == 403
 
     # Setup: Secret benar pada admin belum aktif -> 200
-    r2 = client.get("/api/v1/auth/ats-mfa/1/setup", headers={"X-Internal-Secret": SECRET})
+    r2 = client.get("/api/v1/auth/ats-mfa/1/setup", headers={"X-Internal-Secret": SECRET, "X-Admin-Id": "1"})
     assert r2.status_code == 200
     secret_key = r2.json()["secret"]
 
     # Setup: Secret benar pada admin yang sudah aktif -> 400
-    r3 = client.get("/api/v1/auth/ats-mfa/3/setup", headers={"X-Internal-Secret": SECRET})
+    r3 = client.get("/api/v1/auth/ats-mfa/3/setup", headers={"X-Internal-Secret": SECRET, "X-Admin-Id": "3"})
     assert r3.status_code == 400
 
     # Verify: Tanpa secret -> 403
@@ -305,7 +308,7 @@ def test_ats_mfa_endpoints():
     # Verify: Secret benar + kode salah -> 400
     r5 = client.post(
         "/api/v1/auth/ats-mfa/verify",
-        headers={"X-Internal-Secret": SECRET},
+        headers={"X-Internal-Secret": SECRET, "X-Admin-Id": "1"},
         json={"admin_id": 1, "enable": True, "code": "000000"},
     )
     assert r5.status_code == 400
@@ -314,7 +317,7 @@ def test_ats_mfa_endpoints():
     totp = pyotp.TOTP(secret_key)
     r6 = client.post(
         "/api/v1/auth/ats-mfa/verify",
-        headers={"X-Internal-Secret": SECRET},
+        headers={"X-Internal-Secret": SECRET, "X-Admin-Id": "1"},
         json={"admin_id": 1, "enable": True, "code": totp.now()},
     )
     assert r6.status_code == 200

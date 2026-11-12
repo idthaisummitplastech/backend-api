@@ -20,6 +20,12 @@ class RecruitmentAdmin(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     portal_access = Column(String(20), default="both", nullable=False)  # perusahaan | karir | both
     is_first_login = Column(Boolean, default=True, nullable=False)  # true=wajib ganti password saat login pertama
+    mfa_verified_at = Column(DateTime(timezone=True), nullable=True)  # Waktu verifikasi MFA sesi terakhir
+    password_changed_at = Column(DateTime(timezone=True), nullable=True)  # Waktu terakhir ganti kata sandi
+    session_version = Column(Integer, default=1, nullable=False)  # Versi sesi untuk invalidasi token stale
+    totp_failed_attempts = Column(Integer, default=0, nullable=False)  # Percobaan salah beruntun
+    totp_locked_until = Column(DateTime(timezone=True), nullable=True)  # Waktu terkunci jika >= 5 percobaan salah
+    last_used_totp_timestep = Column(Integer, nullable=True)  # Anti-replay 30s timestep window
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
@@ -41,6 +47,12 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     portal_access = Column(String(20), default="both", nullable=False)  # perusahaan | karir | both
     is_first_login = Column(Boolean, default=True, nullable=False)
+    mfa_verified_at = Column(DateTime(timezone=True), nullable=True)  # Waktu verifikasi MFA sesi terakhir
+    password_changed_at = Column(DateTime(timezone=True), nullable=True)  # Waktu terakhir ganti kata sandi
+    session_version = Column(Integer, default=1, nullable=False)  # Versi sesi untuk invalidasi token stale
+    totp_failed_attempts = Column(Integer, default=0, nullable=False)  # Percobaan salah beruntun
+    totp_locked_until = Column(DateTime(timezone=True), nullable=True)  # Waktu terkunci jika >= 5 percobaan salah
+    last_used_totp_timestep = Column(Integer, nullable=True)  # Anti-replay 30s timestep window
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),

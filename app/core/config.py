@@ -1,5 +1,5 @@
 import json
-from typing import List, Self, Union
+from typing import Any, List, Self, Union
 from pydantic import AnyHttpUrl, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     VERSION: str = "1.0.0"
     FIRST_LOGIN_ENFORCE: bool = False
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug_flag(cls, v: Any) -> bool:
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "1", "yes", "on", "debug")
+        return bool(v)
 
     # Security & Cryptography — WAJIB via env, tanpa fallback di code.
     SECRET_KEY: str = ""

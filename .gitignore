@@ -39,6 +39,10 @@ ENV/
 .env*.local
 !.env.example
 
+# Tooling and graphify outputs
+graphify-out/
+*.db
+
 # IDE & Editor files
 .vscode/
 .idea/

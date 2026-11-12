@@ -1,6 +1,7 @@
 import json
 import re
 import secrets
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
@@ -24,7 +25,15 @@ from app.models.cms import (
 from app.models.auth import User, RecruitmentAdmin
 from app.schemas.cms import ContactSubmissionCreate, ContactSubmissionResponse
 from app.schemas.common import ApiResponse, StatusResponse
-from app.api.deps import get_current_admin, RoleChecker, security_scheme
+from app.api.deps import (
+    get_current_admin,
+    get_current_cms_user,
+    get_cms_user_base,
+    _enforce_first_login_and_mfa,
+    require_account_identity,
+    RoleChecker,
+    security_scheme,
+)
 from app.api.v1.endpoints.auth import require_internal_secret
 from app.core.middleware import limiter
 from app.core.security import get_password_hash, verify_password, create_access_token, verify_totp
@@ -125,13 +134,26 @@ def reorder_admin_menus(
 # --- DASHBOARD STATS FOR WEB PERUSAHAAN ---
 @router.get("/dashboard-stats")
 def get_dashboard_stats(
-    request: Request,
+    request: Request = None,
     db: Session = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
+    current_user: Any = None,
 ):
     """Retrieve summarized statistics for CMS Admin Dashboard."""
-    require_internal_secret(request)
+    if not isinstance(current_user, User):
+        if isinstance(credentials, HTTPAuthorizationCredentials) and credentials.credentials:
+            current_user = get_current_cms_user(request=request, credentials=credentials, db_company=db)
+        elif request:
+            require_internal_secret(request)
+            current_user = get_current_cms_user(request=request, credentials=None, db_company=db)
+        else:
+            raise HTTPException(status_code=403, detail="Akses ditolak.")
 
-    admin_role = (request.headers.get("x-admin-role") or request.headers.get("X-Admin-Role") or "").lower()
+    admin_role = (
+        getattr(current_user, "role", None)
+        or (request.headers.get("x-admin-role") if request else None)
+        or ""
+    ).lower()
     if admin_role not in ["admin", "superadmin", "marketing"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -187,13 +209,31 @@ def get_cms_profile(
     user_id: int = Query(...),
     request: Request = None,
     db: Session = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
+    current_user: Any = None,
 ):
-    """Fetch CMS user profile."""
-    if request:
+    """Fetch CMS user profile with anti-IDOR verification."""
+    if isinstance(current_user, User):
+        require_account_identity(current_user, user_id)
+        user = current_user
+    elif isinstance(credentials, HTTPAuthorizationCredentials) and credentials.credentials:
+        current_user = get_current_cms_user(request=request, credentials=credentials, db_company=db)
+        require_account_identity(current_user, user_id)
+        user = current_user
+    elif request:
         require_internal_secret(request)
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+        cms_id_hdr = request.headers.get("x-cms-user-id") or request.headers.get("X-CMS-User-Id")
+        if cms_id_hdr:
+            current_user = get_current_cms_user(request=request, credentials=None, db_company=db)
+            require_account_identity(current_user, user_id)
+            user = current_user
+        else:
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
+            _enforce_first_login_and_mfa(user, "mfa_enabled")
+    else:
+        raise HTTPException(status_code=403, detail="Akses ditolak.")
 
     backup_codes_count = 0
     if user.backup_codes:
@@ -219,6 +259,8 @@ def update_cms_profile(
     request: Request = None,
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
+    current_user: Any = None,
 ):
     """Update CMS user profile, password, or MFA."""
     if request:
@@ -227,11 +269,31 @@ def update_cms_profile(
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID wajib disertakan.")
 
-    user = db.query(User).filter(User.id == int(user_id)).first()
+    if isinstance(current_user, User):
+        user = current_user
+        require_account_identity(current_user, user_id)
+    elif isinstance(credentials, HTTPAuthorizationCredentials) and credentials.credentials:
+        current_user = get_cms_user_base(request=request, credentials=credentials, db_company=db)
+        require_account_identity(current_user, user_id)
+        user = current_user
+    elif request:
+        cms_id_hdr = request.headers.get("x-cms-user-id") or request.headers.get("X-CMS-User-Id")
+        if cms_id_hdr:
+            current_user = get_cms_user_base(request=request, credentials=None, db_company=db)
+            require_account_identity(current_user, user_id)
+            user = current_user
+        else:
+            user = db.query(User).filter(User.id == int(user_id)).first()
+    else:
+        user = db.query(User).filter(User.id == int(user_id)).first()
+
     if not user:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan.")
 
     action = payload.get("action")
+    if action != "change_password":
+        _enforce_first_login_and_mfa(user, "mfa_enabled")
+
     if action == "update_profile":
         name = str(payload.get("name", "")).strip()
         if not name:
@@ -258,8 +320,12 @@ def update_cms_profile(
             raise HTTPException(status_code=400, detail="Kata sandi baru minimal 12 karakter.")
 
         hashed = get_password_hash(new_password)
+        now_utc = datetime.now(timezone.utc)
         user.password = hashed
         user.is_first_login = False
+        user.password_changed_at = now_utc
+        user.session_version = getattr(user, "session_version", 1) + 1
+        user.mfa_verified_at = None
         db.commit()
 
         # Sync to recruitment_admins if exists
@@ -267,6 +333,9 @@ def update_cms_profile(
         if rec_admin:
             rec_admin.password = hashed
             rec_admin.is_first_login = False
+            rec_admin.password_changed_at = now_utc
+            rec_admin.session_version = getattr(rec_admin, "session_version", 1) + 1
+            rec_admin.mfa_verified_at = None
             karir_db.commit()
 
         # Terbitkan token penuh baru jika MFA sudah aktif
@@ -434,7 +503,7 @@ SENSITIVE_MODELS = {
 SENSITIVE_GET_MODELS = SENSITIVE_MODELS
 
 
-def check_cms_write_access(model: str, admin: RecruitmentAdmin) -> None:
+def check_cms_write_access(model: str, user: Any) -> None:
     """
     Validasi otorisasi tulis (POST/PUT/DELETE) model CMS:
     - Model sensitif (users, contacts, admin-menus) HANYA untuk role 'admin' / 'superadmin'.
@@ -442,7 +511,7 @@ def check_cms_write_access(model: str, admin: RecruitmentAdmin) -> None:
     - Model di luar registri ditolak (403) jika bukan admin.
     """
     m = model.lower()
-    role = (admin.role or "").lower()
+    role = (getattr(user, "role", "") or "").lower()
     if m in SENSITIVE_MODELS:
         if role not in ("admin", "superadmin"):
             raise HTTPException(
@@ -468,7 +537,7 @@ def check_cms_model_access(
     request: Request,
     db: Session,
     credentials: Optional[HTTPAuthorizationCredentials] = None,
-) -> Optional[RecruitmentAdmin]:
+) -> Optional[Any]:
     """
     Periksa hak akses pembacaan model CMS:
     - Model dalam PUBLIC_GET_MODELS diizinkan tanpa autentikasi.
@@ -479,14 +548,14 @@ def check_cms_model_access(
     if m in PUBLIC_GET_MODELS:
         return None
 
-    # Default-deny: wajib autentikasi (X-Internal-Secret dengan X-Admin-Role / X-Admin-Id atau Bearer JWT)
-    admin = get_current_admin(request=request, credentials=credentials, db=db)
-    if m == "users" and admin.role not in ("admin", "superadmin"):
+    # Default-deny: wajib autentikasi operasional CMS (get_current_cms_user)
+    user = get_current_cms_user(request=request, credentials=credentials, db_company=db)
+    if m == "users" and (getattr(user, "role", "") or "").lower() not in ("admin", "superadmin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Akses ditolak. Model 'users' hanya dapat diakses oleh peran admin.",
         )
-    return admin
+    return user
 
 
 # --- DYNAMIC CMS CRUD FOR WEB PERUSAHAAN ---
@@ -690,10 +759,12 @@ def create_cms_item(
     response: Response,
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
-    current_admin: RecruitmentAdmin = Depends(get_current_admin),
+    current_user: Any = Depends(get_current_cms_user),
+    current_admin: Optional[Any] = None,
 ):
     """Create dynamic CMS record (Admin or Marketing depending on model)."""
-    check_cms_write_access(model, current_admin)
+    user_auth = current_admin if current_admin is not None else current_user
+    check_cms_write_access(model, user_auth)
     generated_temp_pwd: Optional[str] = None
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
@@ -902,10 +973,12 @@ def update_cms_item(
     payload: Dict[str, Any],
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
-    current_admin: RecruitmentAdmin = Depends(get_current_admin),
+    current_user: Any = Depends(get_current_cms_user),
+    current_admin: Optional[Any] = None,
 ):
     """Update dynamic CMS record (Admin or Marketing depending on model)."""
-    check_cms_write_access(model, current_admin)
+    user_auth = current_admin if current_admin is not None else current_user
+    check_cms_write_access(model, user_auth)
     generated_temp_pwd: Optional[str] = None
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
@@ -1024,10 +1097,12 @@ def delete_cms_item(
     id: int,
     db: Session = Depends(get_db),
     karir_db: Session = Depends(get_karir_db),
-    current_admin: RecruitmentAdmin = Depends(get_current_admin),
+    current_user: Any = Depends(get_current_cms_user),
+    current_admin: Optional[Any] = None,
 ):
     """Delete dynamic CMS record (Admin or Marketing depending on model)."""
-    check_cms_write_access(model, current_admin)
+    user_auth = current_admin if current_admin is not None else current_user
+    check_cms_write_access(model, user_auth)
     generated_temp_pwd: Optional[str] = None
     crud = CMSModelRegistry.get_crud(model)
     if not crud:
