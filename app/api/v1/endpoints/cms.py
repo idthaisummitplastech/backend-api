@@ -23,6 +23,7 @@ from app.models.cms import (
     SustainabilityReport,
 )
 from app.models.auth import User, RecruitmentAdmin
+from app.models.recruitment import DataKaryawan
 from app.schemas.cms import ContactSubmissionCreate, ContactSubmissionResponse
 from app.schemas.common import ApiResponse, StatusResponse
 from app.api.deps import (
@@ -202,6 +203,71 @@ def get_dashboard_stats(
         "user_count": user_count,
         "recent_contacts": recent_contacts,
     })
+
+
+# --- CMS EMPLOYEES ENDPOINT (READ-ONLY PROXY DARI DB KARIR) ---
+@router.get("/employees")
+def get_cms_employees(
+    search: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=100),
+    employee_status: Optional[str] = Query(None),
+    karir_db: Session = Depends(get_karir_db),
+    current_user: User = Depends(get_current_cms_user),
+):
+    """
+    Endpoint Karyawan Khusus CMS (Read-Only):
+    - Otorisasi wajib get_current_cms_user, hanya peran admin (dari DB User).
+    - Membaca DataKaryawan dari DB karir secara read-only.
+    - Whitelist ketat: HANYA employee_id, full_name, email, department, job_title.
+    - Field sensitif (NIK, telepon, alamat, tanggal lahir, kontrak, dll) DILARANG.
+    - Mendukung ?search= (token per kata, ilike pada full_name/first_name/last_name/employee_id/email).
+    """
+    if (current_user.role or "").lower() != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses ditolak. Fitur ini hanya untuk Administrator.",
+        )
+
+    from sqlalchemy import or_
+
+    query = karir_db.query(DataKaryawan)
+
+    # Filter status jika diminta (kecuali 'all')
+    if employee_status and employee_status.lower() != "all":
+        query = query.filter(DataKaryawan.employee_status == employee_status)
+
+    # Filter pencarian token per kata
+    if search:
+        tokens = [t.strip() for t in search.strip().split() if t.strip()]
+        for token in tokens:
+            pattern = f"%{token}%"
+            token_filter = or_(
+                DataKaryawan.full_name.ilike(pattern),
+                DataKaryawan.first_name.ilike(pattern),
+                DataKaryawan.last_name.ilike(pattern),
+                DataKaryawan.employee_id.ilike(pattern),
+                DataKaryawan.email.ilike(pattern),
+            )
+            query = query.filter(token_filter)
+
+    results = query.order_by(DataKaryawan.sequence_number.asc(), DataKaryawan.id.asc()).limit(limit).all()
+
+    employees_list = [
+        {
+            "employee_id": emp.employee_id,
+            "full_name": emp.full_name,
+            "email": emp.email,
+            "department": emp.department,
+            "job_title": emp.job_title,
+        }
+        for emp in results
+    ]
+
+    return {
+        "success": True,
+        "total": len(employees_list),
+        "employees": employees_list,
+    }
 
 
 # --- PROFILE ENDPOINTS FOR CMS ADMIN ---
