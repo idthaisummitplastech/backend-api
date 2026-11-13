@@ -1,6 +1,8 @@
 import os
 os.environ["ENVIRONMENT"] = "test"
 os.environ["DEBUG"] = "true"
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["DATABASE_COMPANY_URL"] = "sqlite:///:memory:"
 import json
 from datetime import datetime, timezone
 import pyotp
@@ -14,6 +16,7 @@ import app.db.session as db_session
 from app.db.base import Base
 from app.core.config import settings
 settings.ENVIRONMENT = "test"
+settings.FIRST_LOGIN_ENFORCE = False
 from app.core.security import get_password_hash, create_access_token
 from app.models.auth import RecruitmentAdmin, User
 from app.models.recruitment import Applicant, JobPosting
@@ -62,8 +65,19 @@ SECRET = settings.INTERNAL_API_SECRET
 @pytest.fixture(scope="module", autouse=True)
 def seed_test_database():
     """Seed real entities in SQLite test database."""
+    settings.FIRST_LOGIN_ENFORCE = False
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_db_company] = override_get_db
     db = TestingSessionLocal()
     try:
+        db.query(RecruitmentAdmin).delete()
+        db.query(User).delete()
+        db.query(Applicant).delete()
+        db.query(JobPosting).delete()
+        db.query(Announcement).delete()
+        db.query(ContactSubmission).delete()
+        db.commit()
+
         # 1. CMS Users
         cms_admin = User(
             id=1,

@@ -70,7 +70,7 @@ def setup_test_data():
         id=1,
         username="admin_test",
         name="ATS Admin Test",
-        email="admin@test.local",
+        email="admin@test.com",
         password=get_password_hash("TestPass1234!"),
         role="admin",
         is_active=True,
@@ -83,7 +83,7 @@ def setup_test_data():
     cms_user = User(
         id=10,
         username="cms_test",
-        email="cms@test.local",
+        email="cms@test.com",
         name="CMS User Test",
         password=get_password_hash("TestPass1234!"),
         role="admin",
@@ -299,4 +299,223 @@ class TestRoleOnlyFallback:
             assert user.username == "cms_internal"
         finally:
             settings.FIRST_LOGIN_ENFORCE = orig
+
+
+# ── 3. Cross-Domain Call (web-perusahaan -> ATS /recruitment/employees) ──────
+
+
+class TestCrossDomainWebPerusahaanToATS:
+    """
+    web-perusahaan memanggil /recruitment/employees (ATS) dengan X-CMS-User-Id + X-Admin-Role (tanpa X-Admin-Id).
+    Membuktikan perilaku dengan TestClient dan dependensi asli.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup_app_and_client(self):
+        import app.db.init_db as init_db_module
+        init_db_module.engine = test_engine
+        init_db_module.engine_company = test_engine
+        init_db_module.init_db = lambda db: None
+
+        from main import app
+        from app.db.session import get_db, get_db_company
+        from fastapi.testclient import TestClient
+
+        def override_db():
+            db = TestingSessionLocal()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_db_company] = override_db
+        self.client = TestClient(app)
+        yield
+        app.dependency_overrides.clear()
+
+    def test_cross_domain_call_allowed_when_enforce_false(self):
+        """Saat FIRST_LOGIN_ENFORCE=false, panggilan lolos via akun sintetis role-only (admin_internal, id=0)."""
+        orig = settings.FIRST_LOGIN_ENFORCE
+        settings.FIRST_LOGIN_ENFORCE = False
+        try:
+            res = self.client.get(
+                "/api/v1/recruitment/employees",
+                headers={
+                    "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+                    "X-CMS-User-Id": "10",
+                    "X-Admin-Role": "admin",
+                    "X-Session-Version": "1",
+                },
+            )
+            assert res.status_code == 200
+            assert "employees" in res.json()
+        finally:
+            settings.FIRST_LOGIN_ENFORCE = orig
+
+    def test_cross_domain_call_rejected_when_enforce_true(self):
+        """Saat FIRST_LOGIN_ENFORCE=true, panggilan ditolak 401 karena endpoint operasional ATS wajib X-Admin-Id nyata."""
+        orig = settings.FIRST_LOGIN_ENFORCE
+        settings.FIRST_LOGIN_ENFORCE = True
+        try:
+            res = self.client.get(
+                "/api/v1/recruitment/employees",
+                headers={
+                    "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+                    "X-CMS-User-Id": "10",
+                    "X-Admin-Role": "admin",
+                    "X-Session-Version": "1",
+                },
+            )
+            assert res.status_code == 401
+            assert "X-Admin-Id" in res.json()["detail"]
+        finally:
+            settings.FIRST_LOGIN_ENFORCE = orig
+
+
+# ── 4. Role-Only Base Dependency IDOR Protection (FIRST_LOGIN_ENFORCE=true) ─
+
+
+class TestRoleOnlyBaseDependencyIDORProtection:
+    """
+    Saat FIRST_LOGIN_ENFORCE=true, panggilan role-only (tanpa X-Admin-Id / X-CMS-User-Id,
+    menghasilkan id sintetis 0) TIDAK BISA bertindak atas akun lain (id sintetis 0 vs target_id).
+    Menguji 6 endpoint alur kredensial / MFA.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup_app_and_client(self):
+        import app.db.init_db as init_db_module
+        init_db_module.engine = test_engine
+        init_db_module.engine_company = test_engine
+        init_db_module.init_db = lambda db: None
+
+        from main import app
+        from app.db.session import get_db, get_db_company
+        from fastapi.testclient import TestClient
+
+        def override_db():
+            db = TestingSessionLocal()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_db_company] = override_db
+        self.client = TestClient(app)
+        yield
+        app.dependency_overrides.clear()
+
+    def test_ats_mfa_setup_role_only_cannot_access_target_admin(self):
+        """ats-mfa/{id}/setup: role-only (id=0) ditolak IDOR saat mengakses admin_id=1."""
+        orig = settings.FIRST_LOGIN_ENFORCE
+        settings.FIRST_LOGIN_ENFORCE = True
+        try:
+            res = self.client.get(
+                "/api/v1/auth/ats-mfa/1/setup",
+                headers={
+                    "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+                    "X-Admin-Role": "admin",
+                },
+            )
+            assert res.status_code == 403
+            assert "IDOR_DETECTED" in res.json()["detail"]
+        finally:
+            settings.FIRST_LOGIN_ENFORCE = orig
+
+    def test_ats_mfa_verify_role_only_cannot_verify_target_admin(self):
+        """ats-mfa/verify: role-only (id=0) ditolak IDOR saat memverifikasi admin_id=1."""
+        orig = settings.FIRST_LOGIN_ENFORCE
+        settings.FIRST_LOGIN_ENFORCE = True
+        try:
+            res = self.client.post(
+                "/api/v1/auth/ats-mfa/verify",
+                headers={
+                    "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+                    "X-Admin-Role": "admin",
+                },
+                json={"admin_id": 1, "code": "123456", "enable": True},
+            )
+            assert res.status_code == 403
+            assert "IDOR_DETECTED" in res.json()["detail"]
+        finally:
+            settings.FIRST_LOGIN_ENFORCE = orig
+
+    def test_cms_mfa_get_secret_role_only_cannot_access_target_user(self):
+        """cms-mfa/{user_id}: role-only (id=0) ditolak IDOR saat mengakses user_id=10."""
+        orig = settings.FIRST_LOGIN_ENFORCE
+        settings.FIRST_LOGIN_ENFORCE = True
+        try:
+            res = self.client.get(
+                "/api/v1/auth/cms-mfa/10",
+                headers={
+                    "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+                    "X-Admin-Role": "admin",
+                },
+            )
+            assert res.status_code == 403
+            assert "IDOR_DETECTED" in res.json()["detail"]
+        finally:
+            settings.FIRST_LOGIN_ENFORCE = orig
+
+    def test_cms_mfa_save_secret_role_only_cannot_modify_target_user(self):
+        """cms-mfa/{user_id}/save-secret: role-only (id=0) ditolak IDOR saat menyimpan secret user_id=10."""
+        orig = settings.FIRST_LOGIN_ENFORCE
+        settings.FIRST_LOGIN_ENFORCE = True
+        try:
+            res = self.client.put(
+                "/api/v1/auth/cms-mfa/10/save-secret",
+                headers={
+                    "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+                    "X-Admin-Role": "admin",
+                },
+                json={"secret": "JBSWY3DPEHPK3PXP"},
+            )
+            assert res.status_code == 403
+            assert "IDOR_DETECTED" in res.json()["detail"]
+        finally:
+            settings.FIRST_LOGIN_ENFORCE = orig
+
+    def test_cms_mfa_activate_role_only_cannot_activate_target_user(self):
+        """cms-mfa/activate: role-only (id=0) ditolak IDOR saat mengaktifkan MFA user_id=10."""
+        orig = settings.FIRST_LOGIN_ENFORCE
+        settings.FIRST_LOGIN_ENFORCE = True
+        try:
+            res = self.client.post(
+                "/api/v1/auth/cms-mfa/activate",
+                headers={
+                    "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+                    "X-Admin-Role": "admin",
+                },
+                json={"user_id": 10, "code": "123456", "enable": True},
+            )
+            assert res.status_code == 403
+            assert "IDOR_DETECTED" in res.json()["detail"]
+        finally:
+            settings.FIRST_LOGIN_ENFORCE = orig
+
+    def test_change_password_role_only_cannot_change_target_user(self):
+        """change-password (/cms/profile): role-only (id=0) ditolak IDOR saat mengubah password user_id=10."""
+        orig = settings.FIRST_LOGIN_ENFORCE
+        settings.FIRST_LOGIN_ENFORCE = True
+        try:
+            res = self.client.post(
+                "/api/v1/cms/profile",
+                headers={
+                    "X-Internal-Secret": settings.INTERNAL_API_SECRET,
+                    "X-Admin-Role": "admin",
+                },
+                json={
+                    "user_id": 10,
+                    "action": "change_password",
+                    "current_password": "TestPass1234!",
+                    "new_password": "NewSecretPassword123!",
+                },
+            )
+            assert res.status_code == 403
+            assert "IDOR_DETECTED" in res.json()["detail"]
+        finally:
+            settings.FIRST_LOGIN_ENFORCE = orig
+
 

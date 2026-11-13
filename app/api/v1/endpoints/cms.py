@@ -34,6 +34,7 @@ from app.api.deps import (
     RoleChecker,
     security_scheme,
 )
+from app.core.config import settings
 from app.api.v1.endpoints.auth import require_internal_secret
 from app.core.middleware import limiter
 from app.core.security import get_password_hash, verify_password, create_access_token, verify_totp
@@ -278,7 +279,7 @@ def update_cms_profile(
         user = current_user
     elif request:
         cms_id_hdr = request.headers.get("x-cms-user-id") or request.headers.get("X-CMS-User-Id")
-        if cms_id_hdr:
+        if cms_id_hdr or settings.FIRST_LOGIN_ENFORCE:
             current_user = get_cms_user_base(request=request, credentials=None, db_company=db)
             require_account_identity(current_user, user_id)
             user = current_user

@@ -40,8 +40,8 @@ def require_account_identity(account, target_id: Any) -> None:
     account_id = getattr(account, "id", None)
     if account_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identitas akun tidak ditemukan.")
-    # Akun sistem internal (id=0) diizinkan
-    if account_id == 0:
+    # Akun sistem internal (id=0) diizinkan HANYA jika penegakan first-login tidak aktif (backward compatibility)
+    if not settings.FIRST_LOGIN_ENFORCE and account_id == 0:
         return
     if target_id is None:
         return

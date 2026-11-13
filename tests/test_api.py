@@ -1,7 +1,57 @@
-import pytest
+"""
+Smoke tests for root/health endpoints, security headers, password hashing, and JWT flow.
+Uses SQLite in-memory — no PostgreSQL required.
+"""
+import os
+os.environ["ENVIRONMENT"] = "test"
+os.environ["DEBUG"] = "true"
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["DATABASE_COMPANY_URL"] = "sqlite:///:memory:"
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+import app.db.session as db_session
+from app.db.base import Base
+from app.core.config import settings
+settings.ENVIRONMENT = "test"
+
+# In-memory SQLite engine shared across threads (StaticPool)
+test_engine = create_engine(
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+Base.metadata.create_all(bind=test_engine)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+
+db_session.engine = test_engine
+db_session.engine_company = test_engine
+db_session.SessionLocal = TestingSessionLocal
+db_session.SessionCompanyLocal = TestingSessionLocal
+
+import app.db.init_db as init_db_module
+init_db_module.engine = test_engine
+init_db_module.engine_company = test_engine
+init_db_module.init_db = lambda db: None
+
 from fastapi.testclient import TestClient
 from main import app
 from app.core.security import get_password_hash, verify_password, create_access_token, decode_access_token
+from app.db.session import get_db, get_db_company
+
+
+def override_get_db():
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+app.dependency_overrides[get_db] = override_get_db
+app.dependency_overrides[get_db_company] = override_get_db
 
 client = TestClient(app)
 
