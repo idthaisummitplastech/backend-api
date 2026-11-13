@@ -914,15 +914,25 @@ def get_employees_list(
         # By default, only show active employees (exclude resigned/terminated)
         query = query.filter(DataKaryawan.employee_status != "resign")
     if search:
-        s = f"%{search.strip()}%"
-        query = query.filter(
-            (DataKaryawan.full_name.ilike(s)) |
-            (DataKaryawan.employee_id.ilike(s)) |
-            (DataKaryawan.nik.ilike(s)) |
-            (DataKaryawan.email.ilike(s)) |
-            (DataKaryawan.job_title.ilike(s)) |
-            (DataKaryawan.department.ilike(s))
-        )
+        # Pencarian token per kata: setiap kata wajib cocok ke salah satu kolom.
+        # Spasi berlebih / berulang dinormalisasi agar "  rifqi   ahmad  " == "rifqi ahmad".
+        tokens = [token for token in search.strip().split() if token]
+        if tokens:
+            from sqlalchemy import or_
+            for token in tokens:
+                s = f"%{token}%"
+                query = query.filter(
+                    or_(
+                        DataKaryawan.full_name.ilike(s),
+                        DataKaryawan.first_name.ilike(s),
+                        DataKaryawan.last_name.ilike(s),
+                        DataKaryawan.employee_id.ilike(s),
+                        DataKaryawan.nik.ilike(s),
+                        DataKaryawan.email.ilike(s),
+                        DataKaryawan.job_title.ilike(s),
+                        DataKaryawan.department.ilike(s),
+                    )
+                )
 
     if sort and str(sort).lower() == "asc":
         employees = query.order_by(DataKaryawan.sequence_number.asc(), DataKaryawan.id.asc()).all()
